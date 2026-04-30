@@ -1,7 +1,5 @@
 import { motion } from "motion/react";
 import { Toaster, toast } from "sonner";
-import { formatDistanceToNow } from "date-fns";
-import { ptBR } from "date-fns/locale";
 import React, {
   useState,
   useMemo,
@@ -93,6 +91,7 @@ import {
   TrendingUp,
   ArrowUpRight,
   Check,
+  CheckCheck,
   Flag,
   Pencil,
   RefreshCw,
@@ -616,8 +615,8 @@ export const App: React.FC = () => {
 
   // Navigation & Layout State
   const [currentView, setCurrentView] = useState<
+    | "dashboard"
     | "simulator"
-    | "notifications"
     | "history"
     | "ceps"
     | "products"
@@ -630,7 +629,7 @@ export const App: React.FC = () => {
     | "reports"
     | "settings"
     | "solicitacoes_logistica"
-  >("notifications");
+  >("dashboard");
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [isUserPopupOpen, setIsUserPopupOpen] = useState(false);
 
@@ -3229,6 +3228,21 @@ export const App: React.FC = () => {
     );
   };
 
+  const dashboardPendingQuotesCount = useMemo(() => {
+    if (!currentUser) return 0;
+    return historyQuotes.filter(q => q.status === 'pendente' && (q.user_id === currentUser.id || q.email_usuario === currentUser.email_corporativo)).length;
+  }, [historyQuotes, currentUser]);
+
+  const dashboardOpenChamadosCount = useMemo(() => {
+    if (!currentUser) return 0;
+    const isLogistica = currentUser.departamento === "Logística";
+    if (isLogistica) {
+      return chamadosList.filter(c => c.status !== "Encerrado" && c.motivo === 'Frete divergente').length;
+    } else {
+      return chamadosList.filter(c => c.status !== "Encerrado" && c.vendedor_id === currentUser.id && c.motivo !== 'Frete divergente').length;
+    }
+  }, [chamadosList, currentUser]);
+
   const copyToClipboard = async (text: string) => {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -3251,6 +3265,10 @@ export const App: React.FC = () => {
   // --- NOTIFICATIONS STATE ---
   const [notificacoes, setNotificacoes] = useState<Notificacao[]>([]);
   const [localCacheVersion, setLocalCacheVersion] = useState<number>(0);
+  const [visibleNotificacoes, setVisibleNotificacoes] = useState<Notificacao[]>(
+    [],
+  );
+  const [isNotifPopupOpen, setIsNotifPopupOpen] = useState(false);
   const [isLoadingNotifs, setIsLoadingNotifs] = useState(false);
 
   const [isLoadingFreights, setIsLoadingFreights] = useState(false);
@@ -3923,7 +3941,7 @@ export const App: React.FC = () => {
           .select(
             `
           *,
-          origem:usuarios!usuario_origem(nome, sobrenome, foto_url)
+          origem:usuarios!usuario_origem(nome, sobrenome)
         `,
           )
           .eq("usuario_destino", currentUser.id)
@@ -3933,15 +3951,11 @@ export const App: React.FC = () => {
 
         if (error) throw error;
 
-        const formattedNotifs = (data || []).map((n: any) => {
-          const origem = Array.isArray(n.origem) ? n.origem[0] : n.origem;
-          return {
-            ...n,
-            origem_nome: origem?.nome,
-            origem_sobrenome: origem?.sobrenome,
-            origem_foto: origem?.foto_url,
-          };
-        });
+        const formattedNotifs = (data || []).map((n: any) => ({
+          ...n,
+          origem_nome: n.origem?.nome,
+          origem_sobrenome: n.origem?.sobrenome,
+        }));
 
         setNotificacoes((prev) => {
           // Se for uma atualização e tivermos novas notificações, mostramos o toast
@@ -4009,8 +4023,37 @@ export const App: React.FC = () => {
       setNotificacoes((prev) =>
         prev.map((n) => (n.id === notifId ? { ...n, lida: true } : n)),
       );
+      setVisibleNotificacoes((prev) =>
+        prev.map((n) => (n.id === notifId ? { ...n, lida: true } : n)),
+      );
     } catch (err) {
       console.error("Erro ao marcar notificação como lida:", err);
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    if (!currentUser) return;
+    try {
+      const { error } = await supabase
+        .from("notificacoes")
+        .update({ lida: true })
+        .eq("usuario_destino", currentUser.id)
+        .eq("lida", false);
+      
+      if (error) throw error;
+      
+      await incrementUserCache(currentUser.id);
+      
+      setNotificacoes((prev) =>
+        prev.map((n) => ({ ...n, lida: true }))
+      );
+      setVisibleNotificacoes((prev) =>
+        prev.map((n) => ({ ...n, lida: true }))
+      );
+      showNotification("Todas as notificações foram marcadas como lidas.");
+    } catch (err) {
+      console.error("Erro ao marcar todas como lidas:", err);
+      showNotification("Erro ao processar solicitação.");
     }
   };
 
@@ -4032,13 +4075,25 @@ export const App: React.FC = () => {
   };
 
   useEffect(() => {
-    if (currentView === "notifications" && notificacoes.length > 0) {
+    if (isNotifPopupOpen) {
+      // Ao abrir, congelamos o que será exibido
+      setVisibleNotificacoes(notificacoes);
+      // Disparamos a ação de marcar como lidas no banco
       const unreadIds = notificacoes.filter((n) => !n.lida).map((n) => n.id);
       if (unreadIds.length > 0) {
         markAllAsRead(unreadIds);
       }
+    } else {
+      // Ao fechar, atualizamos o estado real para refletir que as que foram vistas agora são lidas
+      // Isso fará com que o badge e a lista se atualizem para a PRÓXIMA vez que abrir
+      if (visibleNotificacoes.length > 0) {
+        const visibleIds = new Set(visibleNotificacoes.map((n) => n.id));
+        setNotificacoes((prev) =>
+          prev.map((n) => (visibleIds.has(n.id) ? { ...n, lida: true } : n)),
+        );
+      }
     }
-  }, [currentView, notificacoes.length]);
+  }, [isNotifPopupOpen]);
 
   const incrementUserCache = async (userId: string) => {
     try {
@@ -4277,9 +4332,7 @@ export const App: React.FC = () => {
     const isAdmin = ["admin", "Administrador"].includes(
       currentUser.tipo_acesso,
     );
-    const isLogistica =
-      currentUser.departamento?.toLowerCase().trim().includes("logistica") ||
-      currentUser.departamento?.toLowerCase().trim().includes("logística");
+    const isLogistica = currentUser.departamento === "Logística";
     const isComercial = currentUser.departamento === "Comercial";
     const isSupervisor = (currentUser.funcao || "")
       .toLowerCase()
@@ -4676,12 +4729,12 @@ export const App: React.FC = () => {
           );
 
         const isLogistica =
-          currentUser.departamento?.toLowerCase().trim().includes("logistica") ||
-          currentUser.departamento?.toLowerCase().trim().includes("logística");
+          currentUser.departamento?.toUpperCase() === "LOGÍSTICA" ||
+          currentUser.departamento?.toUpperCase() === "LOGISTICA";
 
         // Filter by date based on role
-        let days = 30; // Default for users
-        if (isAdminOrSupervisor || isLogistica) {
+        let days = 30; // Default for users and Logistics
+        if (isAdminOrSupervisor) {
           days = 90;
         }
 
@@ -4695,6 +4748,8 @@ export const App: React.FC = () => {
           .select(
             "id, created_at, pedido, cliente, cidade, uf, transportadora, service, frete, prazo, valor_fiscal, peso_cotado, volumes_cotado, idsimulacao, tipo_cotacao, cotacao, contrato, cpf_cnpj, cep, notas, user_id, email_usuario, brindes, observacoes, retira, pin, status",
           )
+          // 4. Global filter: status must be 'pendente'
+          .eq("status", "pendente")
           .gte("created_at", periodAgo)
           // 5. Performance: Sort by descending
           .order("pin", { ascending: false })
@@ -4945,12 +5000,7 @@ export const App: React.FC = () => {
           "admin",
           "supervisor",
         ];
-        const isLogistica =
-          currentUser.departamento?.toLowerCase().trim().includes("logistica") ||
-          currentUser.departamento?.toLowerCase().trim().includes("logística");
-
-        const isPrivileged =
-          privilegedRoles.includes(currentUser.tipo_acesso) || isLogistica;
+        const isPrivileged = privilegedRoles.includes(currentUser.tipo_acesso);
 
         if (!isPrivileged) {
           query = query.eq("vendedor_id", currentUser.id);
@@ -5299,7 +5349,7 @@ export const App: React.FC = () => {
           {/* Conteúdo Principal */}
           <div className="flex-1 flex flex-col gap-1">
             <span className="text-lg font-black text-blue-600 tracking-tight">
-              {item.registro}{type === "afericao" ? "gr" : ""}
+              {type === "afericao" ? `${(Number(item.registro) / 1000).toFixed(2)}kg` : item.registro}
             </span>
             
             <div className="flex items-center">
@@ -6676,9 +6726,7 @@ export const App: React.FC = () => {
         .lte("data_insercao", `${romaneioEndDate}T23:59:59`);
 
       if (romaneioStatus === "liberados") {
-        query = query.or(
-          "status.eq.Aprovado,status.eq.Autorizado,status.eq.aprovado,status.eq.autorizado",
-        );
+        query = query.or("status.eq.Aprovado,status.eq.Autorizado");
       } else if (romaneioStatus === "todos") {
         // No status filter
       } else if (romaneioStatus) {
@@ -8200,7 +8248,7 @@ Peso total: ${totalWeight.toFixed(2)}kg Volumes: ${totalVolumes}`;
       const itemsList = simulationItems
         .map(
           (item) =>
-            `${item.quantity} cx ${item.comprimento}x${item.largura}x${item.altura}, ${Number(item.peso_total_kg || 0).toFixed(2)}kg`,
+            `${item.quantity} cx ${item.comprimento}x${item.largura}x${item.altura}, ${item.peso_total_kg}kg`,
         )
         .join("\n");
 
@@ -8225,7 +8273,7 @@ Tipo: ${typeLabel}
 Volumes
 ${itemsList}
 
-Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes}`;
+Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
       }
 
       return `Remetente e tomador do frete:
@@ -8246,8 +8294,8 @@ Tipo: ${typeLabel}
 Volumes
 ${itemsList}
 
-Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes}`;
-      }
+Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
+    }
 
     // Mapeamento de nomes de transportadoras conforme solicitado
     let displayCarrier = carrier;
@@ -8449,19 +8497,27 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
   };
 
   const handleEditBrindes = async () => {
-    if (!selectedHistoryQuote || !editBrindesValue.trim()) return;
+    if (!selectedHistoryQuote) return;
+    
+    const newValue = editBrindesValue.trim();
+    
+    // Validar: vazio ou mínimo 10 caracteres
+    if (newValue.length > 0 && newValue.length < 10) {
+      showNotification("O campo Brindes deve conter no mínimo 10 caracteres ou ser deixado vazio.");
+      return;
+    }
 
     try {
       const { error } = await supabase
         .from("cotacoes")
-        .update({ brindes: editBrindesValue.trim() })
+        .update({ brindes: newValue === "" ? null : newValue })
         .eq("id", selectedHistoryQuote.id);
 
       if (error) throw error;
 
       setSelectedHistoryQuote({
         ...selectedHistoryQuote,
-        brindes: editBrindesValue.trim(),
+        brindes: newValue === "" ? "Nenhum" : newValue,
       });
       setIsEditingBrindes(false);
       showNotification("Brindes atualizados com sucesso!");
@@ -8534,6 +8590,18 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
       setSaveStatus({
         type: "error",
         message: "Razão Social ou Nome deve conter no mínimo 3 caracteres.",
+      });
+      setIsSaving(false);
+      return;
+    }
+
+    if (
+      complementaryData.giftItems.trim().length > 0 &&
+      complementaryData.giftItems.trim().length < 10
+    ) {
+      setSaveStatus({
+        type: "error",
+        message: "O campo Brindes deve conter no mínimo 10 caracteres ou ser deixado vazio.",
       });
       setIsSaving(false);
       return;
@@ -8815,8 +8883,7 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
         comprimento: item.comprimento,
         largura: item.largura,
         altura: item.altura,
-        peso_total_kg: parseFloat(item.peso_total_kg.toFixed(3)),
-        peso_total_final: parseFloat((item.peso_total_kg * item.quantity).toFixed(3)),
+        peso: item.peso_total_kg,
         peso_cubado: Number(
           (
             ((item.comprimento * item.largura * item.altura) / 6000) *
@@ -9948,6 +10015,9 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
       !newFreight.rastreio
     )
       return alert("Rastreio obrigatório para esta operação.");
+    if (secondaryInvoices.length > 0 || selectedFreight.qtd_notas > 1) {
+      return showToast("Notas fiscais secundárias pendentes");
+    }
 
     setIsSaving(true);
 
@@ -10462,48 +10532,18 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
     }
   };
 
-  const getNotificationIcon = (operacao: string, size: number = 24) => {
+  const getNotificationIcon = (operacao: string) => {
     switch (operacao) {
       case "Gestão de Envios":
-        return <Truck size={size} className="text-blue-600" />;
+        return <CircleDollarSign size={14} className="text-blue-600" />;
       case "Contratos":
-        return <Handshake size={size} className="text-emerald-600" />;
+        return <Handshake size={14} className="text-blue-600" />;
       case "Chamados":
-        return <Flag size={size} className="text-amber-600" />;
-      case "Financeiro":
-        return <CircleDollarSign size={size} className="text-rose-600" />;
-      case "Divergência":
-        return <CirclePercent size={size} className="text-purple-600" />;
-      case "Solicitação Logística":
-        return <Backpack size={size} className="text-indigo-600" />;
+        return <Flag size={14} className="text-blue-600" />;
       case "DG Sell Out":
-        return <ShoppingBag size={size} className="text-orange-600" />;
+        return <Package size={14} className="text-amber-600" />;
       default:
-        return <Bell size={size} className="text-slate-400" />;
-    }
-  };
-
-  const handleAccessNotification = (notif: Notificacao) => {
-    markNotifAsRead(notif.id);
-    switch (notif.operacao) {
-      case "Gestão de Envios":
-        setCurrentView("envios");
-        break;
-      case "Contratos":
-        setCurrentView("contratos");
-        break;
-      case "Chamados":
-        setCurrentView("chamados");
-        break;
-      case "Divergência":
-        setCurrentView("divergencias");
-        break;
-      case "Solicitação Logística":
-        setCurrentView("solicitacoes_logistica");
-        break;
-      case "DG Sell Out":
-        setCurrentView("history");
-        break;
+        return <Bell size={14} className="text-blue-600" />;
     }
   };
 
@@ -10564,8 +10604,7 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
 
     if (
       currentUser &&
-      (currentUser?.departamento?.toLowerCase().includes("logistica") ||
-        currentUser?.departamento?.toLowerCase().includes("logística") ||
+      (currentUser.departamento === "Logística" ||
         ["admin", "Administrador"].includes(currentUser.tipo_acesso))
     ) {
       items.push({ id: "romaneio", icon: ClipboardList, label: "Romaneio" });
@@ -11112,23 +11151,22 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
             )}
 
             {/* NOTIFICATIONS BELL */}
-            <div className="relative">
-              <button
-                onClick={() => setCurrentView("notifications")}
-                className={`p-2.5 rounded-xl border transition-all relative outline-none ${
-                  currentView === "notifications"
-                    ? "bg-slate-800 border-slate-700 text-blue-400"
-                    : "bg-neutral-900 border-neutral-800 text-slate-400 hover:bg-slate-800 hover:text-white"
-                }`}
-              >
-                <Bell size={22} />
-                {openNotifsCount > 0 && (
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-600 text-white text-[10px] font-black rounded-full flex items-center justify-center border-2 border-neutral-950 animate-pulse">
-                    {openNotifsCount > 99 ? "99+" : openNotifsCount}
-                  </span>
-                )}
-              </button>
-            </div>
+            <button
+              onClick={() => setCurrentView("dashboard")}
+              className={`p-2.5 rounded-xl border transition-all relative outline-none ${
+                currentView === "dashboard"
+                  ? "bg-slate-800 border-slate-700 text-blue-400"
+                  : "bg-neutral-900 border-neutral-800 text-slate-400 hover:bg-slate-800 hover:text-white"
+              }`}
+              title="Notificações"
+            >
+              <Bell size={22} />
+              {openNotifsCount > 0 && (
+                <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-600 text-white text-[10px] font-black rounded-full flex items-center justify-center border-2 border-neutral-950 animate-pulse">
+                  {openNotifsCount > 99 ? "99+" : openNotifsCount}
+                </span>
+              )}
+            </button>
 
             {isUserPopupOpen && (
               <div
@@ -11283,19 +11321,6 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
             const count = (item as any).count;
             const displayCount = count > 9 ? "+9" : count;
 
-            let sectionOps: string[] = [];
-            switch (item.id) {
-              case "envios": sectionOps = ["Gestão de Envios"]; break;
-              case "contratos": sectionOps = ["Contratos"]; break;
-              case "chamados": sectionOps = ["Chamados"]; break;
-              case "divergencias": sectionOps = ["Divergência"]; break;
-              case "solicitacoes_logistica": sectionOps = ["Solicitação Logística"]; break;
-              case "history": sectionOps = ["DG Sell Out"]; break;
-            }
-            const sectionNotifs = notificacoes.filter(n => sectionOps.includes(n.operacao));
-            const hasSectionNotifs = sectionNotifs.length > 0;
-            const hasSectionUnread = sectionNotifs.some(n => !n.lida);
-
             return (
               <button
                 key={item.id}
@@ -11310,12 +11335,6 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                     <div className="absolute -top-1.5 -right-1.5 min-w-[16px] h-[16px] bg-red-600 text-white text-[9px] font-black rounded-full flex items-center justify-center border border-white shadow-sm animate-pulse">
                       {displayCount}
                     </div>
-                  )}
-                  {hasSectionNotifs && (
-                    <div 
-                      className={`absolute -bottom-1 -right-1 w-2.5 h-2.5 rounded-full border border-white shadow-sm transition-colors ${hasSectionUnread ? 'bg-orange-600 animate-pulse' : 'bg-slate-400'}`} 
-                      title={hasSectionUnread ? "Notificações não lidas" : "Notificações lidas"}
-                    />
                   )}
                 </div>
                 <span
@@ -11356,123 +11375,187 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
       </aside>
 
         <main className="flex-1 min-w-0 pb-10 transition-all duration-300 ease-in-out">
-        {currentView === "notifications" && (
-          <div className="p-8 max-w-7xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
-                  <Bell className="text-blue-600" size={32} />
-                  Notificações
-                </h1>
-                <p className="text-slate-500 font-medium mt-1">
-                  Acompanhe as atualizações e ações importantes do sistema.
-                </p>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="bg-blue-100 text-blue-700 text-xs font-black px-3 py-1 rounded-full uppercase tracking-wider">
-                  {notificacoes.filter((n) => !n.lida).length} não lidas
-                </span>
-                <button
-                  onClick={() => {
-                    const unreadIds = notificacoes
-                      .filter((n) => !n.lida)
-                      .map((n) => n.id);
-                    if (unreadIds.length > 0) markAllAsRead(unreadIds);
-                  }}
-                  className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-slate-50 transition-all shadow-sm"
-                >
-                  Marcar todas como lidas
-                </button>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-[2rem] shadow-xl border border-slate-100 overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50/50 border-b border-slate-100">
-                      <th className="px-6 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest w-24 text-center">Tipo</th>
-                      <th className="px-6 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest w-64">Responsável</th>
-                      <th className="px-6 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Conteúdo</th>
-                      <th className="px-6 py-4 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest w-32">Ação</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {isLoadingNotifs ? (
-                      <tr>
-                        <td colSpan={4} className="px-6 py-24 text-center">
-                          <Loader2 className="animate-spin mx-auto mb-4 text-blue-600" size={40} />
-                          <p className="text-slate-400 font-bold">Carregando notificações...</p>
-                        </td>
-                      </tr>
-                    ) : notificacoes.length > 0 ? (
-                      notificacoes.map((n) => (
-                        <tr key={n.id} className={`group hover:bg-slate-50/50 transition-colors ${!n.lida ? 'bg-blue-50/10' : ''}`}>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center justify-center h-16 w-16 bg-slate-50 rounded-2xl group-hover:bg-white transition-colors border border-transparent group-hover:border-slate-100 shadow-sm mx-auto">
-                              {getNotificationIcon(n.operacao, 32)}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-4">
-                              <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-white shadow-md bg-slate-100 shrink-0">
-                                {n.origem_foto || getUserPhotoById(n.usuario_origem) ? (
-                                  <img 
-                                    src={n.origem_foto || getUserPhotoById(n.usuario_origem)!} 
-                                    alt="Responsável" 
-                                    className="w-full h-full object-cover" 
-                                    referrerPolicy="no-referrer"
-                                  />
-                                ) : (
-                                  <div className="w-full h-full flex items-center justify-center text-slate-400 font-bold bg-slate-100">
-                                    <UserIcon size={20} />
-                                  </div>
-                                )}
-                              </div>
-                              <div className="min-w-0">
-                                <p className="font-bold text-slate-700 truncate">{n.origem_nome || getUserNameById(n.usuario_origem) || "Sistema"} {n.origem_nome ? n.origem_sobrenome : ""}</p>
-                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{n.operacao}</p>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="space-y-1">
-                              <p className={`text-sm leading-relaxed ${!n.lida ? 'text-slate-900 font-bold' : 'text-slate-600'}`}>
-                                {n.mensagem}
-                              </p>
-                              <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400">
-                                <Clock size={12} />
-                                {formatDistanceToNow(new Date(n.data), { addSuffix: true, locale: ptBR })}
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            <button
-                              onClick={() => handleAccessNotification(n)}
-                              className="px-4 py-2 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-md shadow-blue-100 flex items-center gap-2 mx-auto"
-                            >
-                              Acessar
-                              <ArrowRight size={12} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))
+        {currentView === "dashboard" && (
+           <div className="animate-in fade-in duration-500 space-y-6">
+             {/* BLOCK B: USER SUMMARY */}
+             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+               {/* USER INFO PANEL */}
+               <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex items-center gap-5">
+                 <div className="w-16 h-16 rounded-2xl overflow-hidden shadow-sm border-2 border-slate-50 shrink-0">
+                    {currentUser?.foto_url ? (
+                      <img src={currentUser.foto_url} alt="User" className="w-full h-full object-cover" />
                     ) : (
-                      <tr>
-                        <td colSpan={4} className="px-6 py-24 text-center">
-                          <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-6 text-slate-200">
-                            <BellOff size={40} />
-                          </div>
-                          <p className="text-slate-500 font-black text-xl tracking-tight">Vazio por aqui!</p>
-                          <p className="text-slate-400 mt-2 font-medium">Você não possui notificações no momento.</p>
-                        </td>
-                      </tr>
+                      <div className="w-full h-full bg-slate-100 flex items-center justify-center text-slate-400 font-bold text-xl">
+                        {currentUser?.nome?.[0]}{currentUser?.sobrenome?.[0]}
+                      </div>
                     )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
+                 </div>
+                 <div className="min-w-0">
+                   <h2 className="text-lg font-black text-slate-800 leading-tight truncate">
+                     {currentUser?.nome} {currentUser?.sobrenome}
+                   </h2>
+                   <p className="text-slate-500 font-bold text-[10px] uppercase tracking-wider mt-0.5">
+                     {currentUser?.departamento}
+                   </p>
+                 </div>
+               </div>
+
+               {/* PENDING QUOTES CARD */}
+               <div 
+                 onClick={() => setCurrentView("history")}
+                 className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex items-center justify-between cursor-pointer hover:shadow-md hover:border-amber-200 transition-all group"
+               >
+                 <div className="space-y-1">
+                    <p className="text-slate-500 font-bold text-[10px] uppercase tracking-widest">Cotações Pendentes</p>
+                    <h3 className="text-2xl font-black text-slate-800">
+                      {dashboardPendingQuotesCount}
+                    </h3>
+                    <p className="text-[10px] text-amber-600 font-bold">Você tem {dashboardPendingQuotesCount} cotações em aberto</p>
+                 </div>
+                 <div className="w-12 h-12 bg-amber-50 text-amber-500 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
+                   <Clock size={24} />
+                 </div>
+               </div>
+
+               {/* OPEN TICKETS CARD */}
+               <div 
+                 onClick={() => setCurrentView("chamados")}
+                 className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex items-center justify-between cursor-pointer hover:shadow-md hover:border-rose-200 transition-all group"
+               >
+                 <div className="space-y-1">
+                    <p className="text-slate-500 font-bold text-[10px] uppercase tracking-widest">Chamados em Aberto</p>
+                    <h3 className="text-2xl font-black text-slate-800">
+                      {dashboardOpenChamadosCount}
+                    </h3>
+                    <p className="text-[10px] text-rose-600 font-bold">Resolução prioritária</p>
+                 </div>
+                 <div className="w-12 h-12 bg-rose-50 text-rose-500 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
+                   <Flag size={24} />
+                 </div>
+               </div>
+             </div>
+
+             {/* BLOCK A: NOTIFICATIONS DASHBOARD */}
+             <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+               <div className="p-6 border-b border-slate-50 flex items-center justify-between bg-slate-50/50">
+                 <div className="flex items-center gap-3">
+                   <div className="p-2.5 bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-200">
+                     <Bell size={20} />
+                   </div>
+                   <div>
+                     <h3 className="font-black text-slate-800 tracking-tight text-base">Painel de Notificações</h3>
+                     <p className="text-[10px] text-slate-500 font-medium">Fique por dentro das últimas atualizações</p>
+                   </div>
+                 </div>
+                 <div className="flex items-center gap-4">
+                   <span className="bg-blue-100 text-blue-700 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-wider">
+                     {openNotifsCount} novas
+                   </span>
+                   <button
+                     onClick={handleMarkAllAsRead}
+                     disabled={openNotifsCount === 0}
+                     className="text-[10px] font-black text-blue-600 hover:text-blue-700 uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors pl-4 border-l border-blue-100"
+                   >
+                     <CheckCheck size={14} />
+                     Marcar todas como lidas
+                   </button>
+                 </div>
+               </div>
+
+               <div className="overflow-x-auto overflow-y-auto max-h-[calc(100vh-340px)] custom-scrollbar">
+                 <table className="w-full border-collapse">
+                   <thead className="sticky top-0 bg-slate-50 z-10 shadow-sm">
+                     <tr>
+                       <th className="w-4 py-4 pl-6"></th>
+                       <th className="py-4 px-4 text-left text-[9px] font-black text-slate-400 uppercase tracking-widest">Tipo</th>
+                       <th className="py-4 px-4 text-left text-[9px] font-black text-slate-400 uppercase tracking-widest">Responsável</th>
+                       <th className="py-4 px-4 text-left text-[9px] font-black text-slate-400 uppercase tracking-widest">Data</th>
+                       <th className="py-4 px-4 text-left text-[9px] font-black text-slate-400 uppercase tracking-widest">Conteúdo</th>
+                       <th className="py-4 pr-6 text-right text-[9px] font-black text-slate-400 uppercase tracking-widest">Ação</th>
+                     </tr>
+                   </thead>
+                   <tbody className="divide-y divide-slate-50">
+                     {notificacoes.length > 0 ? (
+                       notificacoes.slice().sort((a,b) => new Date(b.data).getTime() - new Date(a.data).getTime()).map((n) => (
+                         <tr 
+                           key={n.id} 
+                           className={`transition-colors text-sm ${!n.lida ? "bg-blue-50/20 font-bold" : "hover:bg-slate-50 text-slate-600"}`}
+                         >
+                           <td className="py-5 pl-6">
+                             <div className={`w-3 h-3 rounded-full ${!n.lida ? "bg-orange-500 shadow-md shadow-orange-100 animate-pulse" : "bg-slate-200"}`} title={!n.lida ? "Não lida" : "Lida"}></div>
+                           </td>
+                           <td className="py-5 px-4">
+                              <div className="flex items-center gap-3">
+                                <div className={`w-10 h-full py-1 rounded-lg flex items-center justify-center shrink-0 ${
+                                  n.operacao === "Contratos" ? "bg-blue-100 text-blue-600" :
+                                  n.operacao === "Chamados" ? "bg-rose-100 text-rose-600" :
+                                  n.operacao === "Gestão de Envios" ? "bg-emerald-100 text-emerald-600" :
+                                  n.operacao === "DG Sell Out" ? "bg-amber-100 text-amber-600" :
+                                  "bg-slate-100 text-slate-600"
+                                }`}>
+                                  {getNotificationIcon(n.operacao)}
+                                </div>
+                              </div>
+                           </td>
+                           <td className="py-5 px-4 whitespace-nowrap">
+                             <div className="flex items-center gap-3">
+                               <div className="w-9 h-9 rounded-xl overflow-hidden bg-slate-100 border border-slate-200 flex items-center justify-center text-xs font-black text-slate-400 shrink-0">
+                                 {getUserPhotoById(n.usuario_origem) ? (
+                                   <img src={getUserPhotoById(n.usuario_origem)!} alt="User" className="w-full h-full object-cover" />
+                                 ) : (
+                                   `${n.origem_nome?.[0]}${n.origem_sobrenome?.[0]}`
+                                 )}
+                               </div>
+                               <div>
+                                 <p className="text-xs font-black text-slate-800">{n.origem_nome} {n.origem_sobrenome}</p>
+                                 <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">{n.operacao}</p>
+                               </div>
+                             </div>
+                           </td>
+                            <td className="py-5 px-4 whitespace-nowrap">
+                              <p className="text-[10px] font-bold text-slate-500 bg-slate-50 border border-slate-100 px-2 py-1 rounded-md inline-block">
+                                {new Date(n.data).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            </td>
+                           <td className="py-5 px-4 min-w-[300px]">
+                             <p className="text-xs line-clamp-2 leading-relaxed text-slate-600">
+                               {n.mensagem}
+                             </p>
+                           </td>
+                           <td className="py-5 pr-6 text-right">
+                             <button
+                               onClick={() => {
+                                 markNotifAsRead(n.id);
+                                 if (n.operacao === "Gestão de Envios") setCurrentView("envios");
+                                 else if (n.operacao === "Contratos") setCurrentView("contratos");
+                                 else if (n.operacao === "Chamados") setCurrentView("chamados");
+                                 else if (n.operacao === "DG Sell Out") setCurrentView("history");
+                               }}
+                               className="px-5 py-2 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md hover:bg-blue-600 hover:-translate-y-0.5 transition-all active:translate-y-0"
+                             >
+                               Acessar
+                             </button>
+                           </td>
+                         </tr>
+                       ))
+                     ) : (
+                       <tr>
+                         <td colSpan={6} className="py-24 text-center">
+                            <div className="flex flex-col items-center justify-center">
+                              <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mb-4">
+                                <BellOff size={32} className="text-slate-200" />
+                              </div>
+                              <p className="font-black text-slate-400 text-sm uppercase tracking-widest">Sem novas notificações</p>
+                              <p className="text-xs text-slate-300 mt-1">Você está em dia com todas as atualizações!</p>
+                            </div>
+                         </td>
+                       </tr>
+                     )}
+                   </tbody>
+                 </table>
+               </div>
+             </div>
+           </div>
         )}
 
         {currentView === "contratos" && (
@@ -13233,7 +13316,7 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                               </p>
                               <p className="text-[10px] text-slate-400 font-bold mt-0.5 uppercase tracking-wider truncate">
                                 {item.comprimento} x {item.largura} x{" "}
-                                {item.altura}, {Number(item.peso_total_kg || 0).toFixed(2)}kg
+                                {item.altura}, {item.peso_total_kg}kg
                               </p>
                             </div>
 
@@ -14335,7 +14418,7 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                             </span>
                           </div>
                           <div className="text-[10px] font-bold text-slate-400">
-                            {(Number(q.peso_cotado || 0) / 1000).toFixed(2)}kg -{" "}
+                            {Number((q.peso_cotado || 0) / 1000).toFixed(2)}kg -{" "}
                             {q.volumes_cotado} vol
                           </div>
                         </div>
@@ -15519,7 +15602,7 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                       <th className="px-6 py-4">Código ADM</th>
                       <th className="px-6 py-4">Tipo</th>
                       <th className="px-6 py-4">Dimensões (cm)</th>
-                      <th className="px-6 py-4">Peso (g)</th>
+                      <th className="px-6 py-4">Peso (kg)</th>
                       <th className="px-6 py-4 text-center">Quality</th>
                       <th className="px-6 py-4 text-center">Correios</th>
                     </tr>
@@ -15577,7 +15660,7 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                             </div>
                           </td>
                           <td className="px-6 py-4 font-bold text-slate-700">
-                            {p.peso_unitario}g
+                            {p.peso_unitario / 1000}kg
                           </td>
                           <td className="px-6 py-4 text-center">
                             {p.envio_quality ? (
@@ -15869,8 +15952,8 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                       onChange={(e) => setRomaneioStatus(e.target.value)}
                       className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-bold text-slate-700"
                     >
-                      <option value="">Selecione...</option>
-                      <option value="liberados">Fretes liberados</option>
+                      <option value="">Selecione o status...</option>
+                      <option value="liberados">Fretes liberados (Aprovado/Autorizado)</option>
                       <option value="todos">Todos os fretes</option>
                     </select>
                   </div>
@@ -16835,13 +16918,13 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1 text-center">
-                          Peso Adicional (g)
+                          Peso Adicional (kg)
                         </label>
                         <input
                           type="number"
-                          value={addItemExtraWeight || ""}
+                          value={addItemExtraWeight ? addItemExtraWeight / 1000 : ""}
                           onChange={(e) =>
-                            setAddItemExtraWeight(Number(e.target.value))
+                            setAddItemExtraWeight(Number(e.target.value) * 1000)
                           }
                           disabled={addItemFilter !== "Caixa DG"}
                           placeholder="0"
@@ -19712,11 +19795,11 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                         </div>
                         <div>
                           <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                            Peso Cotado (g)
+                            Peso Cotado (kg)
                           </label>
                           <input
-                            type="number"
-                            value={validationPesoCotado !== null ? validationPesoCotado : ""}
+                            type="text"
+                            value={validationPesoCotado !== null ? (validationPesoCotado / 1000).toFixed(2) : ""}
                             readOnly
                             className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-xl outline-none font-medium text-sm text-slate-500 cursor-not-allowed"
                             placeholder="Automático"
@@ -19724,12 +19807,12 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                         </div>
                         <div>
                           <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                            Peso Aferido (g)
+                            Peso Aferido (kg)
                           </label>
                           <div className="flex gap-2">
                             <input
-                              type="number"
-                              value={validationPesoAferido !== null ? validationPesoAferido : ""}
+                              type="text"
+                              value={validationPesoAferido !== null ? (validationPesoAferido / 1000).toFixed(2) : ""}
                               readOnly
                               className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-xl outline-none font-medium text-sm text-slate-500 cursor-not-allowed"
                               placeholder="Automático"
@@ -19750,11 +19833,11 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                         </div>
                         <div>
                           <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                            Peso Nota Fiscal (g)
+                            Peso Nota Fiscal (kg)
                           </label>
                           <input
-                            type="number"
-                            value={newFreight.peso_bruto ? newFreight.peso_bruto * 1000 : ""}
+                            type="text"
+                            value={newFreight.peso_bruto ? newFreight.peso_bruto.toFixed(2) : ""}
                             readOnly
                             className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-xl outline-none font-medium text-sm text-slate-500 cursor-not-allowed"
                             placeholder="Automático (via XML)"
@@ -20026,11 +20109,11 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                   disabled={
                     !newFreight.cliente ||
                     !newFreight.transportadora ||
-                    (!newFreight.frete && newFreight.transportadora !== "Motoboy") ||
+                    !newFreight.frete ||
                     !newFreight.operacao ||
-                    (!newFreight.pedido && newFreight.operacao !== "Financeiro") ||
+                    !newFreight.pedido ||
                     !newFreight.vendedor ||
-                    (newFreight.cl === undefined || newFreight.cl === null) ||
+                    !newFreight.cl ||
                     !newFreight.valor_nota_principal ||
                     !newFreight.nota_fiscal_primaria ||
                     !newFreight.cep ||
@@ -20760,9 +20843,20 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                           hasGift: e.target.value.trim().length > 0,
                         })
                       }
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-bold"
+                      className={`w-full p-2.5 bg-slate-50 border rounded-xl outline-none focus:ring-2 font-bold transition-all ${
+                        complementaryData.giftItems.trim().length > 0 &&
+                        complementaryData.giftItems.trim().length < 10
+                          ? "border-rose-300 focus:ring-rose-500 text-rose-700 bg-rose-50/30"
+                          : "border-slate-200 focus:ring-blue-500 text-slate-700"
+                      }`}
                       placeholder="Quais brindes? (Deixe vazio se não houver)"
                     />
+                    {complementaryData.giftItems.trim().length > 0 &&
+                      complementaryData.giftItems.trim().length < 10 && (
+                        <p className="text-[10px] text-rose-500 font-bold ml-1 animate-in fade-in slide-in-from-top-1">
+                          Mínimo 10 caracteres necessário
+                        </p>
+                      )}
                   </div>
 
                   {/* Restrição de Líquidos Toggle */}
@@ -24716,7 +24810,7 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                         Peso
                       </label>
                       <p className="font-bold text-slate-700 text-[12.6px]">
-                        {(Number(selectedHistoryQuote.peso_cotado || 0) / 1000).toFixed(2)} kg
+                        {Number((selectedHistoryQuote.peso_cotado || 0) / 1000).toFixed(2)} kg
                       </p>
                     </div>
                     <div>
@@ -24793,7 +24887,7 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                                 Peso Real
                               </label>
                               <p className="font-bold text-slate-600 text-[11px]">
-                                {Number(item.peso || 0).toFixed(2)} kg
+                                {item.peso} kg
                               </p>
                             </div>
                             <div className="bg-white p-2 rounded-lg border border-slate-100">
@@ -24801,7 +24895,7 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                                 Peso Cubado
                               </label>
                               <p className="font-bold text-slate-600 text-[11px]">
-                                {Number(item.peso_cubado || 0).toFixed(2)} kg
+                                {item.peso_cubado} kg
                               </p>
                             </div>
                           </div>
@@ -24884,7 +24978,7 @@ Peso total: ${(Number(totalWeight || 0) / 1000).toFixed(2)}kg Volumes: ${volumes
                     </h3>
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="font-black text-slate-700">Peso Cotado Atual: {(Number(selectedHistoryQuote.peso_cotado || 0) / 1000).toFixed(2)} kg</p>
+                        <p className="font-black text-slate-700">Peso Cotado Atual: {Number((selectedHistoryQuote.peso_cotado || 0) / 1000).toFixed(2)} kg</p>
                         <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
                           Pagador: {selectedHistoryQuote.pagador || "Não definido"}
                         </p>
