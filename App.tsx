@@ -11376,9 +11376,9 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
 
         <main className="flex-1 min-w-0 pb-10 transition-all duration-300 ease-in-out">
         {currentView === "dashboard" && (
-           <div className="animate-in fade-in duration-500 space-y-6">
-             {/* BLOCK B: USER SUMMARY */}
-             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+           <div className="animate-in fade-in duration-500 grid grid-cols-1 lg:grid-cols-[350px_1fr] xl:grid-cols-[35%_65%] gap-6 items-start">
+             {/* LADO ESQUERDO: DADOS DO SISTEMA (35%) */}
+             <div className="space-y-6">
                {/* USER INFO PANEL */}
                <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex items-center gap-5">
                  <div className="w-16 h-16 rounded-2xl overflow-hidden shadow-sm border-2 border-slate-50 shrink-0">
@@ -11435,8 +11435,8 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                </div>
              </div>
 
-             {/* BLOCK A: NOTIFICATIONS DASHBOARD */}
-             <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+             {/* LADO DIREITO: PAINEL DE NOTIFICAÇÕES (65%) */}
+             <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden flex flex-col h-full lg:max-h-[calc(100vh-140px)]">
                <div className="p-6 border-b border-slate-50 flex items-center justify-between bg-slate-50/50">
                  <div className="flex items-center gap-3">
                    <div className="p-2.5 bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-200">
@@ -11462,7 +11462,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                  </div>
                </div>
 
-               <div className="overflow-x-auto overflow-y-auto max-h-[calc(100vh-340px)] custom-scrollbar">
+                <div className="overflow-x-auto overflow-y-auto flex-1 custom-scrollbar min-h-0">
                  <table className="w-full border-collapse">
                    <thead className="sticky top-0 bg-slate-50 z-10 shadow-sm">
                      <tr>
