@@ -3243,6 +3243,14 @@ export const App: React.FC = () => {
     }
   }, [chamadosList, currentUser]);
 
+  const userContractsCount = useMemo(() => {
+    if (!currentUser) return 0;
+    return contratos.filter(c => (typeof c.vendedor === 'object' ? c.vendedor?.id === currentUser?.id : c.vendedor === currentUser?.id)).length;
+  }, [contratos, currentUser]);
+
+  const totalProductsCount = useMemo(() => productList.length, [productList]);
+  const totalCarriersCount = useMemo(() => carrierList.length, [carrierList]);
+
   const copyToClipboard = async (text: string) => {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -10654,7 +10662,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+      <div className="min-h-screen bg-transparent flex items-center justify-center">
         <Loader2 className="animate-spin text-blue-600" size={48} />
       </div>
     );
@@ -10662,7 +10670,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
 
   if (isResettingPassword) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+      <div className="min-h-screen flex items-center justify-center bg-transparent p-4">
         <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-slate-100 p-8 space-y-6">
           <div className="text-center">
             <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -10758,7 +10766,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
 
   if (!currentUser) {
     return (
-      <div className="min-h-screen flex bg-slate-50">
+      <div className="min-h-screen flex bg-transparent">
         <div className="w-full md:w-1/2 flex flex-col justify-center px-12 md:px-24 bg-white relative z-10">
           <div className="max-w-md w-full mx-auto space-y-8">
             <div>
@@ -10932,7 +10940,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
 
   if (mustChangePassword) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+      <div className="min-h-screen flex items-center justify-center bg-transparent p-4">
         <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-slate-100 p-8 space-y-6">
           <div className="text-center">
             <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -11035,7 +11043,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans">
+    <div className="min-h-screen bg-transparent font-sans">
       <Toaster position="top-right" richColors />
       <header className="bg-black border-b border-neutral-900 fixed top-0 left-0 right-0 z-40 h-[60px] shadow-md px-5">
         <div className="h-full max-w-[1680px] mx-auto flex items-center justify-between">
@@ -11376,67 +11384,9 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
 
         <main className="flex-1 min-w-0 pb-10 transition-all duration-300 ease-in-out">
         {currentView === "dashboard" && (
-           <div className="animate-in fade-in duration-500 grid grid-cols-1 lg:grid-cols-[350px_1fr] xl:grid-cols-[35%_65%] gap-6 items-start">
-             {/* LADO ESQUERDO: DADOS DO SISTEMA (35%) */}
-             <div className="space-y-6">
-               {/* USER INFO PANEL */}
-               <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex items-center gap-5">
-                 <div className="w-16 h-16 rounded-2xl overflow-hidden shadow-sm border-2 border-slate-50 shrink-0">
-                    {currentUser?.foto_url ? (
-                      <img src={currentUser.foto_url} alt="User" className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full bg-slate-100 flex items-center justify-center text-slate-400 font-bold text-xl">
-                        {currentUser?.nome?.[0]}{currentUser?.sobrenome?.[0]}
-                      </div>
-                    )}
-                 </div>
-                 <div className="min-w-0">
-                   <h2 className="text-lg font-black text-slate-800 leading-tight truncate">
-                     {currentUser?.nome} {currentUser?.sobrenome}
-                   </h2>
-                   <p className="text-slate-500 font-bold text-[10px] uppercase tracking-wider mt-0.5">
-                     {currentUser?.departamento}
-                   </p>
-                 </div>
-               </div>
-
-               {/* PENDING QUOTES CARD */}
-               <div 
-                 onClick={() => setCurrentView("history")}
-                 className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex items-center justify-between cursor-pointer hover:shadow-md hover:border-amber-200 transition-all group"
-               >
-                 <div className="space-y-1">
-                    <p className="text-slate-500 font-bold text-[10px] uppercase tracking-widest">Cotações Pendentes</p>
-                    <h3 className="text-2xl font-black text-slate-800">
-                      {dashboardPendingQuotesCount}
-                    </h3>
-                    <p className="text-[10px] text-amber-600 font-bold">Você tem {dashboardPendingQuotesCount} cotações em aberto</p>
-                 </div>
-                 <div className="w-12 h-12 bg-amber-50 text-amber-500 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
-                   <Clock size={24} />
-                 </div>
-               </div>
-
-               {/* OPEN TICKETS CARD */}
-               <div 
-                 onClick={() => setCurrentView("chamados")}
-                 className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex items-center justify-between cursor-pointer hover:shadow-md hover:border-rose-200 transition-all group"
-               >
-                 <div className="space-y-1">
-                    <p className="text-slate-500 font-bold text-[10px] uppercase tracking-widest">Chamados em Aberto</p>
-                    <h3 className="text-2xl font-black text-slate-800">
-                      {dashboardOpenChamadosCount}
-                    </h3>
-                    <p className="text-[10px] text-rose-600 font-bold">Resolução prioritária</p>
-                 </div>
-                 <div className="w-12 h-12 bg-rose-50 text-rose-500 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
-                   <Flag size={24} />
-                 </div>
-               </div>
-             </div>
-
-             {/* LADO DIREITO: PAINEL DE NOTIFICAÇÕES (65%) */}
-             <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden flex flex-col h-full lg:max-h-[calc(100vh-140px)]">
+           <div className="animate-in fade-in duration-500 grid grid-cols-1 lg:grid-cols-[1fr_350px] xl:grid-cols-[65%_35%] gap-6 items-start">
+             {/* LADO ESQUERDO: PAINEL DE NOTIFICAÇÕES (65%) */}
+             <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden flex flex-col h-full lg:max-h-[calc(100vh-140px)] order-2 lg:order-1">
                <div className="p-6 border-b border-slate-50 flex items-center justify-between bg-slate-50/50">
                  <div className="flex items-center gap-3">
                    <div className="p-2.5 bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-200">
@@ -11553,6 +11503,114 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                      )}
                    </tbody>
                  </table>
+               </div>
+             </div>
+
+             {/* LADO DIREITO: DADOS DO SISTEMA (35%) */}
+             <div className="space-y-6 order-1 lg:order-2">
+               {/* USER INFO PANEL */}
+               <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex items-center gap-5">
+                 <div className="w-16 h-16 rounded-2xl overflow-hidden shadow-sm border-2 border-slate-50 shrink-0">
+                    {currentUser?.foto_url ? (
+                      <img src={currentUser.foto_url} alt="User" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full bg-slate-100 flex items-center justify-center text-slate-400 font-bold text-xl">
+                        {currentUser?.nome?.[0]}{currentUser?.sobrenome?.[0]}
+                      </div>
+                    )}
+                 </div>
+                 <div className="min-w-0">
+                   <h2 className="text-lg font-black text-slate-800 leading-tight truncate">
+                     {currentUser?.nome} {currentUser?.sobrenome}
+                   </h2>
+                   <p className="text-slate-500 font-bold text-[10px] uppercase tracking-wider mt-0.5 flex items-center gap-2">
+                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                     {currentUser?.departamento}
+                   </p>
+                 </div>
+               </div>
+
+               {/* GRID DE SUMMARY CARDS */}
+               <div className="grid grid-cols-1 gap-4">
+                 {/* PENDING QUOTES CARD */}
+                 <div 
+                   onClick={() => setCurrentView("history")}
+                   className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 flex items-center justify-between cursor-pointer hover:shadow-md hover:border-amber-200 transition-all group"
+                 >
+                   <div className="space-y-1">
+                      <p className="text-slate-400 font-bold text-[9px] uppercase tracking-widest">Cotações Pendentes</p>
+                      <h3 className="text-xl font-black text-slate-800 leading-none">
+                        {dashboardPendingQuotesCount}
+                      </h3>
+                   </div>
+                   <div className="w-10 h-10 bg-amber-50 text-amber-500 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform">
+                     <Clock size={20} />
+                   </div>
+                 </div>
+
+                 {/* OPEN TICKETS CARD */}
+                 <div 
+                   onClick={() => setCurrentView("chamados")}
+                   className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 flex items-center justify-between cursor-pointer hover:shadow-md hover:border-rose-200 transition-all group"
+                 >
+                   <div className="space-y-1">
+                      <p className="text-slate-400 font-bold text-[9px] uppercase tracking-widest">Chamados em Aberto</p>
+                      <h3 className="text-xl font-black text-slate-800 leading-none">
+                        {dashboardOpenChamadosCount}
+                      </h3>
+                   </div>
+                   <div className="w-10 h-10 bg-rose-50 text-rose-500 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform">
+                     <Flag size={20} />
+                   </div>
+                 </div>
+
+                 {/* MEUS CONTRATOS CARD */}
+                 <div 
+                   onClick={() => setCurrentView("contratos")}
+                   className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 flex items-center justify-between cursor-pointer hover:shadow-md hover:border-blue-200 transition-all group"
+                 >
+                   <div className="space-y-1">
+                      <p className="text-slate-400 font-bold text-[9px] uppercase tracking-widest">Meus Contratos</p>
+                      <h3 className="text-xl font-black text-slate-800 leading-none">
+                        {userContractsCount}
+                      </h3>
+                   </div>
+                   <div className="w-10 h-10 bg-blue-50 text-blue-500 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform">
+                     <FileText size={20} />
+                   </div>
+                 </div>
+
+                 {/* PRODUTOS CARD */}
+                 <div 
+                   onClick={() => setCurrentView("products")}
+                   className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 flex items-center justify-between cursor-pointer hover:shadow-md hover:border-emerald-200 transition-all group"
+                 >
+                   <div className="space-y-1">
+                      <p className="text-slate-400 font-bold text-[9px] uppercase tracking-widest">Produtos Cadastrados</p>
+                      <h3 className="text-xl font-black text-slate-800 leading-none">
+                        {totalProductsCount}
+                      </h3>
+                   </div>
+                   <div className="w-10 h-10 bg-emerald-50 text-emerald-500 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform">
+                     <Package size={20} />
+                   </div>
+                 </div>
+
+                 {/* TRANSPORTADORAS CARD */}
+                 <div 
+                   onClick={() => setCurrentView("partners")}
+                   className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 flex items-center justify-between cursor-pointer hover:shadow-md hover:border-indigo-200 transition-all group"
+                 >
+                   <div className="space-y-1">
+                      <p className="text-slate-400 font-bold text-[9px] uppercase tracking-widest">Transportadoras</p>
+                      <h3 className="text-xl font-black text-slate-800 leading-none">
+                        {totalCarriersCount}
+                      </h3>
+                   </div>
+                   <div className="w-10 h-10 bg-indigo-50 text-indigo-500 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform">
+                     <Truck size={20} />
+                   </div>
+                 </div>
                </div>
              </div>
            </div>
