@@ -28,6 +28,7 @@ export type CacheTable =
   | "configuracoes_servicos"
   | "saoluiz_abrangencia"
   | "carex_abrangencia"
+  | "primex_abrangencia"
   | "brix_tarifario"
   | "transportadoras"
   | "produtos"
@@ -40,6 +41,7 @@ export const CACHE_TABLES: CacheTable[] = [
   "configuracoes_servicos",
   "saoluiz_abrangencia",
   "carex_abrangencia",
+  "primex_abrangencia",
   "brix_tarifario",
   "transportadoras",
   "produtos",
