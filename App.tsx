@@ -50,7 +50,6 @@ import {
   Plane,
   BadgeCheck,
   Receipt,
-  Barcode,
   ArrowRight,
   Map as LucideMapIcon,
   Bus,
@@ -92,6 +91,7 @@ import {
   ArrowUpRight,
   Check,
   CheckCheck,
+  Barcode,
   Flag,
   Pencil,
   RefreshCw,
@@ -166,6 +166,7 @@ import {
   QualityRegion,
   SaoLuizAbrangencia,
   CarexAbrangencia,
+  PrimexAbrangencia,
   BrixTariff,
   Usuario,
   Freight,
@@ -635,6 +636,11 @@ export const App: React.FC = () => {
 
   // View States
   const [historyQuotes, setHistoryQuotes] = useState<SavedQuote[]>([]);
+  const [dashboardCounts, setDashboardCounts] = useState({
+    pendingQuotes: 0,
+    openChamados: 0,
+    aligningContracts: 0
+  });
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [hasNewHistoryUpdates, setHasNewHistoryUpdates] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
@@ -851,6 +857,7 @@ export const App: React.FC = () => {
     altura: 0,
     peso_unitario: 80,
     peso_adicional: 0,
+    peso_suportado: [],
     envia_correios: false,
     envio_quality: false,
     precisa_contrato: false,
@@ -1593,6 +1600,7 @@ export const App: React.FC = () => {
   const [saoLuizRetiraOption, setSaoLuizRetiraOption] =
     useState<FreightOption | null>(null);
   const [carexOption, setCarexOption] = useState<FreightOption | null>(null);
+  const [primexOption, setPrimexOption] = useState<FreightOption | null>(null);
   const [brixOption, setBrixOption] = useState<FreightOption | null>(null);
   const [gollogOption, setGollogOption] = useState<FreightOption | null>(null);
   const [hubJetHubOption, setHubJetHubOption] = useState<FreightOption | null>(
@@ -1619,6 +1627,29 @@ export const App: React.FC = () => {
   const [addItemQuantity, setAddItemQuantity] = useState<number>(1);
   const [addItemExtraWeight, setAddItemExtraWeight] = useState<number>(0);
 
+  // Sugestões de peso por código ADM
+  const getWeightSuggestions = (p: Product | null) => {
+    if (!p) return [];
+    return p.peso_suportado || [];
+  };
+
+  useEffect(() => {
+    if (selectedProductToAdd) {
+      const weights = selectedProductToAdd.peso_suportado || [];
+      if (weights.length === 1) {
+        setAddItemExtraWeight(weights[0]);
+      } else {
+        setAddItemExtraWeight(0);
+      }
+    }
+  }, [selectedProductToAdd]);
+
+  const [isProductInfoModalOpen, setIsProductInfoModalOpen] = useState(false);
+  const [selectedProductInfo, setSelectedProductInfo] = useState<Product | null>(
+    null,
+  );
+  const [tempProductWeight, setTempProductWeight] = useState<string>("");
+
   // External Quote Form State
   const [extCarrierId, setExtCarrierId] = useState<string>("");
   const [isExtCarrierPopupOpen, setIsExtCarrierPopupOpen] = useState(false);
@@ -1629,6 +1660,7 @@ export const App: React.FC = () => {
   const [extWithdrawal, setExtWithdrawal] = useState<boolean>(false);
   const [extQuoteId, setExtQuoteId] = useState<string>("");
   const [extService, setExtService] = useState<string>("");
+  const [newServiceInput, setNewServiceInput] = useState<string>("");
   const [extLiquidConfirmed, setExtLiquidConfirmed] = useState<boolean>(false);
 
   // States for selected external carrier properties
@@ -2717,6 +2749,102 @@ export const App: React.FC = () => {
     currentUser,
     mustChangePassword,
   ]);
+
+  // 13 — Primex
+  useEffect(() => {
+    if (!showResults || !fiscalCode) {
+      if (!showResults) setPrimexOption(null);
+      return;
+    }
+
+    const calculatePrimex = async () => {
+      try {
+        setPrimexOption(null);
+
+        // 1. Check if active
+        const config = servicosConfigList.find(
+          (s) =>
+            s.id === SERVICOS_CONFIG_IDS.PRIMEX ||
+            s.transportadora.toUpperCase() === "PRIMEX",
+        );
+        if (config && !config.ativo) return;
+
+        // 2. Query primex_abrangencia using codigo_fiscal
+        const cachedPrimex = useCacheStore
+          .getState()
+          .getTableData<any>("primex_abrangencia");
+        const abrangencia = cachedPrimex.find(
+          (c: any) => c.codigo_fiscal === fiscalCode,
+        );
+
+        if (!abrangencia) return;
+
+        if (config) {
+          const validation = validateServiceConfig(config);
+          if (validation.message) {
+            setPrimexOption({
+              id: "primex-standard",
+              carrier: config.transportadora,
+              service: config.servico,
+              configId: config.id,
+              leadTime: 0,
+              cost: 0,
+              source: "internal",
+              logo: config.logo,
+              ineligibleReason: validation.message,
+              externo: validation.externo,
+              link_externo: validation.link_externo,
+            });
+            return;
+          }
+        }
+
+        // 3. Calculate Price
+        const insurance = nfValue * (abrangencia.seguro / 100);
+        const calculatedCost = Math.max(insurance, abrangencia.frete_minimo);
+
+        let finalCost = calculatedCost;
+        let finalLeadTime = abrangencia.prazo;
+        let restricao_liquido = false;
+
+        if (config) {
+          const modifiers = applyServiceConfigModifiers(
+            config,
+            calculatedCost,
+            abrangencia.prazo,
+          );
+          finalCost = modifiers.cost;
+          finalLeadTime = modifiers.leadTime;
+          restricao_liquido = modifiers.restricao_liquido;
+        }
+
+        setPrimexOption({
+          id: "primex-standard",
+          carrier: config?.transportadora || "PRIMEX",
+          service: config?.servico || "Padrão",
+          configId: config?.id,
+          leadTime: finalLeadTime,
+          cost: Number(finalCost.toFixed(2)),
+          source: "internal",
+          logo: config?.logo,
+          restricao_liquido,
+          tooltipContent: `Mínimo: R$${abrangencia.frete_minimo.toFixed(2)} | Seguro: R$${insurance.toFixed(2)}`,
+          debugData: { abrangencia, insurance, finalCost },
+        });
+      } catch (err) {
+        console.error("Erro ao calcular Primex:", err);
+      }
+    };
+
+    calculatePrimex();
+  }, [
+    showResults,
+    fiscalCode,
+    nfValue,
+    servicosConfigList,
+    currentUser,
+    mustChangePassword,
+  ]);
   // 10 — Brix Cargo
   useEffect(() => {
     if (!showResults || !currentUser || mustChangePassword) {
@@ -3143,6 +3271,9 @@ export const App: React.FC = () => {
   // Carex Data
   const [carexData, setCarexData] = useState<CarexAbrangencia[]>([]);
 
+  // Primex Data
+  const [primexData, setPrimexData] = useState<PrimexAbrangencia[]>([]);
+
   // Brix Data
   const [brixData, setBrixData] = useState<BrixTariff[]>([]);
 
@@ -3228,25 +3359,9 @@ export const App: React.FC = () => {
     );
   };
 
-  const dashboardPendingQuotesCount = useMemo(() => {
-    if (!currentUser) return 0;
-    return historyQuotes.filter(q => q.status === 'pendente' && (q.user_id === currentUser.id || q.email_usuario === currentUser.email_corporativo)).length;
-  }, [historyQuotes, currentUser]);
-
-  const dashboardOpenChamadosCount = useMemo(() => {
-    if (!currentUser) return 0;
-    const isLogistica = currentUser.departamento === "Logística";
-    if (isLogistica) {
-      return chamadosList.filter(c => c.status !== "Encerrado" && c.motivo === 'Frete divergente').length;
-    } else {
-      return chamadosList.filter(c => c.status !== "Encerrado" && c.vendedor_id === currentUser.id && c.motivo !== 'Frete divergente').length;
-    }
-  }, [chamadosList, currentUser]);
-
-  const userContractsCount = useMemo(() => {
-    if (!currentUser) return 0;
-    return contratos.filter(c => (typeof c.vendedor === 'object' ? c.vendedor?.id === currentUser?.id : c.vendedor === currentUser?.id)).length;
-  }, [contratos, currentUser]);
+  const dashboardPendingQuotesCount = dashboardCounts.pendingQuotes;
+  const dashboardOpenChamadosCount = dashboardCounts.openChamados;
+  const aligningContractsCount = dashboardCounts.aligningContracts;
 
   const totalProductsCount = useMemo(() => productList.length, [productList]);
   const totalCarriersCount = useMemo(() => carrierList.length, [carrierList]);
@@ -3465,21 +3580,31 @@ export const App: React.FC = () => {
 
   // Serial Numbers State
   const [seriesList, setSeriesList] = useState<any[]>([]);
+  const [seriesMovimentacoes, setSeriesMovimentacoes] = useState<any[]>([]);
+  const [isLoadingMovimentacoes, setIsLoadingMovimentacoes] = useState(false);
+  const [isSingleReserveModalOpen, setIsSingleReserveModalOpen] = useState(false);
+  const [selectedSeriesToReserve, setSelectedSeriesToReserve] = useState<any>(null);
+
   const sortedSeriesList = useMemo(() => {
     return [...seriesList].sort((a, b) => {
-      const statusOrder: { [key: string]: number } = {
-        "Não definido": 1,
-        "Brinde não enviado junto": 2,
+      const getStatusRank = (s: string) => {
+        const val = (s || "").toLowerCase().trim();
+        // Normalizar acentos
+        const normalized = val.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        
+        if (normalized === "disponivel" || val === "" || val === "disponivel" || val === "disponível") return 0;
+        if (normalized === "reservado" || val === "reservado") return 1;
+        return 2;
       };
-      const orderA = statusOrder[a.status_brinde || "Não definido"] || 3;
-      const orderB = statusOrder[b.status_brinde || "Não definido"] || 3;
+      
+      const rankA = getStatusRank(a.status);
+      const rankB = getStatusRank(b.status);
+      
+      if (rankA !== rankB) return rankA - rankB;
 
-      if (orderA !== orderB) {
-        return orderA - orderB;
-      }
-
-      const dateA = a.data_alteracao ? new Date(a.data_alteracao).getTime() : 0;
-      const dateB = b.data_alteracao ? new Date(b.data_alteracao).getTime() : 0;
+      // 2º critério: data DESC
+      const dateA = a.data ? new Date(a.data).getTime() : 0;
+      const dateB = b.data ? new Date(b.data).getTime() : 0;
       return dateB - dateA;
     });
   }, [seriesList]);
@@ -3694,7 +3819,9 @@ export const App: React.FC = () => {
           vendedor_codigo = vendMatch[1];
         } else {
           vendedor_codigo =
-            xmlDoc.getElementsByTagName("vVend")[0]?.textContent || "";
+            xmlDoc.getElementsByTagName("vVend")[0]?.textContent || 
+            xmlDoc.getElementsByTagName("cVend")[0]?.textContent || 
+            "";
         }
 
         const dest = xmlDoc.getElementsByTagName("dest")[0];
@@ -3737,20 +3864,39 @@ export const App: React.FC = () => {
   const handleSaveContrato = async () => {
     try {
       setIsSaving(true);
-      // Find user by codigo_adm
-      const cachedUsers = useCacheStore
-        .getState()
-        .getTableData<any>("usuarios");
-      const userData = cachedUsers.find(
-        (u: any) => u.codigo_adm === importContratoData.vendedor_codigo,
-      );
+      
+      let vendedorId = null;
+      if (importContratoData.vendedor_codigo) {
+        const searchCode = String(importContratoData.vendedor_codigo);
+        // Try searching in cache first for speed
+        const cachedUsers = useCacheStore
+          .getState()
+          .getTableData<any>("usuarios");
+        const cachedUser = cachedUsers.find(
+          (u: any) => String(u.codigo_adm) === searchCode,
+        );
+
+        if (cachedUser) {
+          vendedorId = cachedUser.id;
+        } else {
+          // Robust fallback: direct query to Supabase
+          const { data: dbUser } = await supabase
+            .from("usuarios")
+            .select("id")
+            .eq("codigo_adm", searchCode)
+            .maybeSingle();
+          if (dbUser) {
+            vendedorId = dbUser.id;
+          }
+        }
+      }
 
       const payload = {
         pedido: importContratoData.pedido,
         cliente: `${importContratoData.cl} - ${importContratoData.cliente}`,
         valor_fiscal: importContratoData.valor_fiscal,
         nota_fiscal: importContratoData.nota_fiscal,
-        vendedor: userData?.id || null,
+        vendedor: vendedorId,
         informacoes_adicionais: importContratoData.informacoes_adicionais,
         status: "Alinhando contrato",
       };
@@ -3759,9 +3905,9 @@ export const App: React.FC = () => {
       if (error) throw error;
 
       // --- NOTIFICATIONS ---
-      if (userData?.id) {
+      if (vendedorId) {
         await sendNotification(
-          userData.id,
+          vendedorId,
           "Contratos",
           `Nota fiscal com contrato emitida para o pedido ${importContratoData.pedido} - ${importContratoData.cliente}`,
         );
@@ -4154,16 +4300,36 @@ export const App: React.FC = () => {
   const notifyAdmins = async (operacao: string, mensagem: string) => {
     const admins = userList.filter(
       (u) =>
-        u.tipo_acesso === "admin" ||
-        u.tipo_acesso === "Administrador" ||
-        u.tipo_acesso === "supervisor" ||
-        ["Supervisor", "Supervisor Comercial", "DG HUB Manager"].includes(
+        ["admin", "Administrador", "supervisor", "Supervisor"].includes(u.tipo_acesso) ||
+        ["Supervisor", "Supervisor Comercial", "DG HUB Manager", "Logística", "Logistica"].includes(
           u.funcao || "",
         ),
     );
 
     for (const admin of admins) {
       await sendNotification(admin.id, operacao, mensagem);
+    }
+  };
+
+  const notifyDepartments = async (
+    departamentos: string[],
+    operacao: string,
+    mensagem: string,
+  ) => {
+    // Busca usuários dos departamentos solicitados
+    const recipients = userList.filter((u) => {
+      const dept = (u.departamento || "").toLowerCase();
+      return departamentos.some(d => {
+        const target = d.toLowerCase();
+        if (target === "logística") {
+          return dept === "logística" || dept === "logistica";
+        }
+        return dept === target;
+      });
+    });
+
+    for (const recipient of recipients) {
+      await sendNotification(recipient.id, operacao, mensagem);
     }
   };
 
@@ -4219,6 +4385,16 @@ export const App: React.FC = () => {
   const openNotifsCount = useMemo(() => {
     return notificacoes.filter((n) => !n.lida).length;
   }, [notificacoes]);
+
+  // Periodic Refresh for Notifications and Dashboard Counts
+  useEffect(() => {
+    if (!currentUser) return;
+    const interval = setInterval(() => {
+      fetchNotifications();
+      fetchDashboardCounts();
+    }, 60000); // 1 minute polling
+    return () => clearInterval(interval);
+  }, [currentUser]);
 
   // --- Auth & Session Management ---
   const checkUserStatus = async (email: string) => {
@@ -4826,6 +5002,58 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  const fetchDashboardCounts = useCallback(async () => {
+    if (!currentUser) return;
+    try {
+      const isAdminOrSupervisor =
+        ["admin", "Administrador", "supervisor", "Supervisor"].includes(
+          currentUser.tipo_acesso || "",
+        ) ||
+        ["Supervisor", "Supervisor Comercial", "DG HUB Manager"].includes(
+          currentUser.funcao || "",
+        );
+
+      // 1. COTAÇÕES PENDENTES (status = 'pendente')
+      let qryQuotes = supabase
+        .from("cotacoes")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "pendente");
+      if (!isAdminOrSupervisor) {
+        qryQuotes = qryQuotes.eq("user_id", currentUser.id);
+      }
+      const { count: countQuotes } = await qryQuotes;
+
+      // 2. CHAMADOS EM ABERTO (status != 'Encerrado', motivo != 'frete divergente')
+      let qryChamados = supabase
+        .from("chamados")
+        .select("*", { count: "exact", head: true })
+        .not("status", "ilike", "Encerrado")
+        .not("motivo", "ilike", "Frete divergente");
+      if (!isAdminOrSupervisor) {
+        qryChamados = qryChamados.eq("vendedor_id", currentUser.id);
+      }
+      const { count: countChamados } = await qryChamados;
+
+      // 3. PEDIDOS ALINHANDO CONTRATO (status = 'Alinhando contrato')
+      let qryContratos = supabase
+        .from("contratos")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "Alinhando contrato");
+      if (!isAdminOrSupervisor) {
+        qryContratos = qryContratos.eq("vendedor", currentUser.id);
+      }
+      const { count: countContratos } = await qryContratos;
+
+      setDashboardCounts({
+        pendingQuotes: countQuotes || 0,
+        openChamados: countChamados || 0,
+        aligningContracts: countContratos || 0
+      });
+    } catch (err) {
+      console.error("Erro ao buscar dashboard counts:", err);
+    }
+  }, [currentUser]);
+
   const fetchExternalQuotes = async (cotacaoId: string) => {
     if (!cotacaoId) return;
     setIsLoadingExternalQuotes(true);
@@ -5145,6 +5373,8 @@ export const App: React.FC = () => {
           "Supervisor",
           "Conferente",
           "Assistente",
+          "admin",
+          "supervisor",
         ].includes(currentUser.tipo_acesso);
 
         if (!isPrivileged) {
@@ -5206,6 +5436,8 @@ export const App: React.FC = () => {
           "Supervisor",
           "Conferente",
           "Assistente",
+          "admin",
+          "supervisor",
         ].includes(currentUser.tipo_acesso);
 
         if (!isPrivileged) {
@@ -5897,6 +6129,15 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  const fetchPrimexData = useCallback(async () => {
+    try {
+      const data = await getCachedData("primex_abrangencia");
+      setPrimexData(data || []);
+    } catch (err) {
+      console.error("Error fetching Primex data", err);
+    }
+  }, []);
+
   const fetchBrixData = useCallback(async () => {
     try {
       const data = await getCachedData("brix_tarifario");
@@ -5940,7 +6181,6 @@ export const App: React.FC = () => {
       const { data, error } = await supabase
         .from("numeros_series")
         .select("*")
-        .eq("status", "reservado")
         .order("data", { ascending: false });
       if (error) throw error;
       setSeriesList(data || []);
@@ -5948,6 +6188,40 @@ export const App: React.FC = () => {
       console.error("Error fetching series:", error);
     } finally {
       setIsLoadingSeries(false);
+    }
+  }, [currentUser]);
+
+  const fetchSeriesMovimentacoes = useCallback(async () => {
+    if (!currentUser) return;
+    setIsLoadingMovimentacoes(true);
+    try {
+      const fifteenDaysAgo = new Date();
+      fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
+      const dateStr = fifteenDaysAgo.toISOString();
+      
+      const { data, error } = await supabase
+        .from("movimentacoes")
+        .select(`
+          id, 
+          created_at, 
+          pedido, 
+          registro, 
+          produto_id, 
+          movimentacao,
+          produtos (
+            descricao
+          )
+        `)
+        .or("movimentacao.ilike.serie,movimentacao.ilike.série,movimentacao.ilike.Número de Série")
+        .gte("created_at", dateStr)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      setSeriesMovimentacoes(data || []);
+    } catch (error) {
+      console.error("Error fetching series movements:", error);
+    } finally {
+      setIsLoadingMovimentacoes(false);
     }
   }, [currentUser]);
 
@@ -6046,6 +6320,46 @@ export const App: React.FC = () => {
       showToast("Série reservada com sucesso!");
       setIsGlobalReserveModalOpen(false);
       setSelectedAvailableSeries(null);
+      setReserveClientName("");
+      fetchSeries();
+    } catch (error) {
+      console.error("Error reserving series:", error);
+      showToast("Erro ao reservar série.");
+    }
+  };
+
+  const handleSingleReserve = async () => {
+    if (!selectedSeriesToReserve) return;
+    const now = new Date();
+    const today = now.toISOString().split("T")[0];
+
+    const updatedLog = [
+      ...(selectedSeriesToReserve.log || []),
+      {
+        data: now.toISOString(),
+        usuario: `${currentUser?.nome} ${currentUser?.sobrenome}`,
+        acao: `Série reservada para: ${reserveClientName}`,
+      },
+    ];
+
+    try {
+      const { error } = await supabase
+        .from("numeros_series")
+        .update({
+          cliente: reserveClientName,
+          status: "reservado",
+          brindes: false,
+          status_brinde: "Não definido",
+          data_alteracao: today,
+          log: updatedLog,
+        })
+        .eq("id", selectedSeriesToReserve.id);
+
+      if (error) throw error;
+
+      showToast("Série reservada com sucesso!");
+      setIsSingleReserveModalOpen(false);
+      setSelectedSeriesToReserve(null);
       setReserveClientName("");
       fetchSeries();
     } catch (error) {
@@ -6195,6 +6509,14 @@ export const App: React.FC = () => {
         : await supabase.from("transportadoras").insert([payload]);
 
       if (error) throw error;
+
+      if (!isEditingCarrier) {
+        await notifyDepartments(
+          ["Logística", "Comercial"],
+          "Transportadoras",
+          `Nova transportadora adicionada: ${payload.nome_fantasia}`
+        );
+      }
 
       showNotification(
         isEditingCarrier
@@ -6488,6 +6810,7 @@ export const App: React.FC = () => {
     fetchLatamData();
     fetchSaoLuizData();
     fetchCarexData();
+    fetchPrimexData();
     fetchBrixData();
     fetchProducts();
     fetchCarriers(true);
@@ -6501,6 +6824,7 @@ export const App: React.FC = () => {
     fetchLatamData,
     fetchSaoLuizData,
     fetchCarexData,
+    fetchPrimexData,
     fetchBrixData,
     fetchProducts,
     fetchCarriers,
@@ -6697,12 +7021,12 @@ export const App: React.FC = () => {
         valor_nota_principal: f.valor_nota_principal,
         transportadora: f.transportadora,
         frete: f.frete,
-        frete_dg: f.frete_dg,
-        status: f.status,
-        aprovacao: f.aprovacao,
-        autorização: f.autorizacao,
-        cep: f.cep,
-        qtd_notas: f.qtd_notas,
+        frete_dg: f?.frete_dg,
+        status: f?.status,
+        aprovacao: f?.aprovacao,
+        autorização: f?.autorizacao,
+        cep: f?.cep,
+        qtd_notas: f?.qtd_notas,
       }));
 
       const worksheet = XLSX.utils.json_to_sheet(excelData);
@@ -7082,8 +7406,11 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser || mustChangePassword) return;
-    if (currentView === "series") fetchSeries();
-  }, [currentView, currentUser, mustChangePassword, fetchSeries]);
+    if (currentView === "series") {
+      fetchSeries();
+      fetchSeriesMovimentacoes();
+    }
+  }, [currentView, currentUser, mustChangePassword, fetchSeries, fetchSeriesMovimentacoes]);
 
   useEffect(() => {
     if (!currentUser || mustChangePassword) return;
@@ -7100,6 +7427,13 @@ export const App: React.FC = () => {
     if (!currentUser || mustChangePassword) return;
     fetchChamados();
   }, [currentView, currentUser, mustChangePassword, fetchChamados]);
+
+  useEffect(() => {
+    if (!currentUser || mustChangePassword) return;
+    if (currentView === "dashboard" || currentView === "notifications" || currentView === "history") {
+      fetchDashboardCounts();
+    }
+  }, [currentView, currentUser, mustChangePassword, fetchDashboardCounts]);
 
   useEffect(() => {
     if (!currentUser || mustChangePassword) return;
@@ -7421,6 +7755,9 @@ export const App: React.FC = () => {
     if (carexOption) {
       combined.push(carexOption);
     }
+    if (primexOption) {
+      combined.push(primexOption);
+    }
     if (gollogOption) {
       combined.push(gollogOption);
     }
@@ -7547,6 +7884,22 @@ export const App: React.FC = () => {
     [carrierList, extCarrierId],
   );
 
+  useEffect(() => {
+    if (selectedExtCarrier) {
+      const services = selectedExtCarrier.lista_servicos || [];
+      if (services.length === 1) {
+        setExtService(services[0]);
+      } else if (services.length === 0) {
+        setExtService("Externo");
+      } else {
+        // For multiple services, don't auto-set, forcing user to pick
+        setExtService("");
+      }
+    } else {
+      setExtService("");
+    }
+  }, [selectedExtCarrier]);
+
   const filteredFreights = useMemo(() => {
     if (!freightSearchTerm) return freightList;
     const term = freightSearchTerm.toLowerCase();
@@ -7668,7 +8021,17 @@ export const App: React.FC = () => {
   }, [isOtherCarriersModalOpen, carrierList.length, fetchCarriers]);
 
   const handleCopyDimensions = (p: Product) => {
-    const text = `${p.comprimento} x ${p.largura} x ${p.altura}, ${p.peso_unitario / 1000}kg`;
+    const weights = p.peso_suportado || [];
+    let weightText = "";
+    if (weights.length === 1) {
+      weightText = `${weights[0] / 1000}kg`;
+    } else if (weights.length > 1) {
+      weightText = "Peso variável";
+    } else {
+      // Fallback for old products without peso_suportado
+      weightText = `${p.peso_unitario / 1000}kg`;
+    }
+    const text = `${p.comprimento} x ${p.largura} x ${p.altura}, ${weightText}`;
     navigator.clipboard.writeText(text);
     setProductToast("Dimensões copiadas");
     setTimeout(() => setProductToast(null), 1000);
@@ -7679,19 +8042,49 @@ export const App: React.FC = () => {
     try {
       const productToSave = {
         ...newProductFormData,
-        codigo_adm: parseInt(newProductFormData.codigo_adm || "0"),
+        codigo_adm: newProductFormData.codigo_adm?.toString(),
         un: "cx",
         exibir: true,
       };
 
-      // Remove fields not in schema if necessary, but Supabase usually ignores extra fields
-      // However, 'ativo' is not in the schema provided by the user.
+      // Ensure consistency: filter out nulls or negatives if any
+      if (productToSave.peso_suportado) {
+        productToSave.peso_suportado = productToSave.peso_suportado.filter(
+          (w) => w > 0,
+        );
+      }
+
       delete (productToSave as any).ativo;
 
-      const { error } = await supabase.from("produtos").insert([productToSave]);
+      let error;
+      if (productToSave.id) {
+        // Edit existing
+        const { error: editError } = await supabase
+          .from("produtos")
+          .update(productToSave)
+          .eq("id", productToSave.id);
+        error = editError;
+      } else {
+        // Insert new
+        const { error: insertError } = await supabase
+          .from("produtos")
+          .insert([productToSave]);
+        error = insertError;
+      }
+
       if (error) throw error;
 
-      setProductToast("Produto cadastrado com sucesso");
+      await notifyDepartments(
+        ["Logística", "Comercial"],
+        "Produtos",
+        `${productToSave.id ? "Produto editado" : "Nova cotação de peso"} para ${newProductFormData.descricao}`,
+      );
+
+      setProductToast(
+        productToSave.id
+          ? "Produto atualizado com sucesso"
+          : "Produto cadastrado com sucesso",
+      );
       setTimeout(() => setProductToast(null), 2000);
       setIsAddProductModalOpen(false);
       fetchProducts(true);
@@ -7704,6 +8097,7 @@ export const App: React.FC = () => {
         altura: 0,
         peso_unitario: 80,
         peso_adicional: 0,
+        peso_suportado: [],
         envia_correios: false,
         envio_quality: false,
         precisa_contrato: false,
@@ -7712,9 +8106,26 @@ export const App: React.FC = () => {
       });
     } catch (err) {
       console.error(err);
-      alert("Erro ao cadastrar produto");
+      alert("Erro ao salvar produto");
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleDeleteProduct = async (id: number) => {
+    if (!window.confirm("Tem certeza que deseja excluir este produto?")) return;
+
+    try {
+      const { error } = await supabase.from("produtos").delete().eq("id", id);
+      if (error) throw error;
+
+      showToast("Produto excluído com sucesso");
+      setIsProductInfoModalOpen(false);
+      setSelectedProductInfo(null);
+      fetchProducts(true);
+    } catch (err) {
+      console.error(err);
+      alert("Erro ao excluir produto");
     }
   };
 
@@ -7815,21 +8226,12 @@ export const App: React.FC = () => {
       .includes("caixa");
     const maxWeight = selectedProductToAdd.peso_adicional || 0;
 
-    if (isCaixaDG) {
-      if (addItemExtraWeight < 100) {
-        alert("O peso adicional para Caixas DG deve ser de no mínimo 100g.");
-        return;
-      }
-      if (maxWeight > 0 && addItemExtraWeight > maxWeight) {
-        alert(
-          `O peso adicional excede o limite de ${maxWeight}g para esta caixa.`,
-        );
-        return;
-      }
+    if (addItemExtraWeight <= 0) {
+      alert("Por favor, selecione o peso.");
+      return;
     }
 
-    const totalWeightKg =
-      (selectedProductToAdd.peso_unitario + addItemExtraWeight) / 1000;
+    const totalWeightKg = addItemExtraWeight / 1000;
     const newItem: SimulationItem = {
       id: Math.random().toString(36).substr(2, 9),
       productId: selectedProductToAdd.id,
@@ -7839,8 +8241,8 @@ export const App: React.FC = () => {
       comprimento: selectedProductToAdd.comprimento,
       largura: selectedProductToAdd.largura,
       altura: selectedProductToAdd.altura,
-      peso_unitario_base_g: selectedProductToAdd.peso_unitario,
-      peso_adicional_selecionado_g: addItemExtraWeight,
+      peso_unitario_base_g: addItemExtraWeight,
+      peso_adicional_selecionado_g: 0,
       peso_total_kg: parseFloat(totalWeightKg.toFixed(3)),
       quantity: addItemQuantity,
       envio_quality: selectedProductToAdd.envio_quality,
@@ -8087,14 +8489,19 @@ Peso total: ${totalWeight.toFixed(2)}kg Volumes: ${totalVolumes}`;
     if (selectedExtCarrier.aceita_liquidos === false && !extLiquidConfirmed)
       return;
 
+    // Validate that a service is selected if multiple exist
+    const services = selectedExtCarrier.lista_servicos || [];
+    if (services.length > 1 && !extService) {
+      showToast("Por favor, selecione um serviço.");
+      return;
+    }
+
     const newExtQuote: FreightOption = {
       id: `ext-${Date.now()}`,
       carrier: selectedExtCarrier.nome_fantasia,
       service:
         extService ||
-        (selectedExtCarrier.lista_servicos?.length > 0
-          ? selectedExtCarrier.lista_servicos[0]
-          : "Externo"),
+        (services.length > 0 ? services[0] : "Externo"),
       leadTime: extLeadTime,
       cost: Number(extCost.toFixed(2)),
       source: "external",
@@ -9520,6 +9927,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
   };
 
   const handleEditFreight = async (freight: Freight) => {
+    if (!freight) return;
     setIsEditingFreight(true);
     setSelectedFreight(freight);
 
@@ -9555,7 +9963,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
     setFreightCL(clVal > 0 ? clVal : 0);
 
     // Se houver notas secundárias, precisaríamos buscar. Por simplicidade, inicia vazio ou busca rápida.
-    if (freight.qtd_notas > 1) {
+    if (freight?.qtd_notas && freight.qtd_notas > 1) {
       const { data: secData } = await supabase
         .from("notas_fiscais_secundarias")
         .select("*")
@@ -9566,7 +9974,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
     }
     setTempSecondaryInvoice({ numero_nota: undefined, valor_nota: 0 });
 
-    if (freight.dados_cotacao) {
+    if (freight?.dados_cotacao) {
       setSelectedQuoteForFreight(freight.dados_cotacao);
     }
 
@@ -10018,12 +10426,11 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
     if (newFreight.brinde && !selectedQuoteForFreight)
       return alert("Para envio de brinde, vincule a cotação.");
     if (
-      (newFreight.operacao === "Envio de brinde" ||
-        newFreight.operacao === "Financeiro") &&
+      newFreight.operacao === "Financeiro" &&
       !newFreight.rastreio
     )
       return alert("Rastreio obrigatório para esta operação.");
-    if (secondaryInvoices.length > 0 || selectedFreight.qtd_notas > 1) {
+    if (secondaryInvoices.length > 0 || (selectedFreight && selectedFreight?.qtd_notas > 1)) {
       return showToast("Notas fiscais secundárias pendentes");
     }
 
@@ -10131,7 +10538,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
         if (error) throw error;
 
         // Atualizar notas secundárias: deletar antigas e inserir novas
-        if (secondaryInvoices.length > 0 || selectedFreight.qtd_notas > 1) {
+        if (secondaryInvoices.length > 0 || (selectedFreight && selectedFreight?.qtd_notas > 1)) {
           await supabase
             .from("notas_fiscais_secundarias")
             .delete()
@@ -10594,7 +11001,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
         currentUser.departamento === "TI" ||
         ["admin", "Administrador"].includes(currentUser.tipo_acesso))
     ) {
-      items.push({ id: "series", icon: PantherIcon, label: "SSJACK" });
+      items.push({ id: "series", icon: Barcode, label: "Controle de números de série" });
     }
 
     if (
@@ -10662,7 +11069,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-transparent flex items-center justify-center">
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <Loader2 className="animate-spin text-blue-600" size={48} />
       </div>
     );
@@ -10670,7 +11077,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
 
   if (isResettingPassword) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-transparent p-4">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
         <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-slate-100 p-8 space-y-6">
           <div className="text-center">
             <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -10766,7 +11173,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
 
   if (!currentUser) {
     return (
-      <div className="min-h-screen flex bg-transparent">
+      <div className="min-h-screen flex bg-slate-50">
         <div className="w-full md:w-1/2 flex flex-col justify-center px-12 md:px-24 bg-white relative z-10">
           <div className="max-w-md w-full mx-auto space-y-8">
             <div>
@@ -10940,7 +11347,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
 
   if (mustChangePassword) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-transparent p-4">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
         <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-slate-100 p-8 space-y-6">
           <div className="text-center">
             <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -11043,7 +11450,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
   ];
 
   return (
-    <div className="min-h-screen bg-transparent font-sans">
+    <div className="min-h-screen bg-slate-50 font-sans">
       <Toaster position="top-right" richColors />
       <header className="bg-black border-b border-neutral-900 fixed top-0 left-0 right-0 z-40 h-[60px] shadow-md px-5">
         <div className="h-full max-w-[1680px] mx-auto flex items-center justify-between">
@@ -11564,15 +11971,15 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                    </div>
                  </div>
 
-                 {/* MEUS CONTRATOS CARD */}
+                 {/* PEDIDOS ALINHANDO CONTRATO CARD */}
                  <div 
                    onClick={() => setCurrentView("contratos")}
                    className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 flex items-center justify-between cursor-pointer hover:shadow-md hover:border-blue-200 transition-all group"
                  >
                    <div className="space-y-1">
-                      <p className="text-slate-400 font-bold text-[9px] uppercase tracking-widest">Meus Contratos</p>
+                      <p className="text-slate-400 font-bold text-[9px] uppercase tracking-widest">Pedidos alinhando contrato</p>
                       <h3 className="text-xl font-black text-slate-800 leading-none">
-                        {userContractsCount}
+                        {aligningContractsCount}
                       </h3>
                    </div>
                    <div className="w-10 h-10 bg-blue-50 text-blue-500 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform">
@@ -11586,7 +11993,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                    className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 flex items-center justify-between cursor-pointer hover:shadow-md hover:border-emerald-200 transition-all group"
                  >
                    <div className="space-y-1">
-                      <p className="text-slate-400 font-bold text-[9px] uppercase tracking-widest">Produtos Cadastrados</p>
+                      <p className="text-slate-400 font-bold text-[9px] uppercase tracking-widest">Dimensões e pesos de produtos cadastrados</p>
                       <h3 className="text-xl font-black text-slate-800 leading-none">
                         {totalProductsCount}
                       </h3>
@@ -11602,7 +12009,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                    className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 flex items-center justify-between cursor-pointer hover:shadow-md hover:border-indigo-200 transition-all group"
                  >
                    <div className="space-y-1">
-                      <p className="text-slate-400 font-bold text-[9px] uppercase tracking-widest">Transportadoras</p>
+                      <p className="text-slate-400 font-bold text-[9px] uppercase tracking-widest">Transportadoras ativas cadastradas</p>
                       <h3 className="text-xl font-black text-slate-800 leading-none">
                         {totalCarriersCount}
                       </h3>
@@ -14092,30 +14499,63 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                                 </div>
                               </div>
 
-                              <div>
-                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                                  {selectedExtCarrier.cotacao_com_numero
-                                    ? "Informe o número da cotação"
-                                    : "Informe o canal cotado ou número de cotação"}
-                                </label>
-                                <input
-                                  type="text"
-                                  value={extQuoteId}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    if (selectedExtCarrier.cotacao_com_numero) {
-                                      setExtQuoteId(val.replace(/\D/g, ""));
-                                    } else {
-                                      setExtQuoteId(val);
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                                    {selectedExtCarrier.cotacao_com_numero
+                                      ? "Informe o número da cotação"
+                                      : "Informe o canal cotado ou número de cotação"}
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={extQuoteId}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (selectedExtCarrier.cotacao_com_numero) {
+                                        setExtQuoteId(val.replace(/\D/g, ""));
+                                      } else {
+                                        setExtQuoteId(val);
+                                      }
+                                    }}
+                                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-bold"
+                                    placeholder={
+                                      selectedExtCarrier.cotacao_com_numero
+                                        ? "Apenas números"
+                                        : "Ex: WhatsApp, E-mail, 123456"
                                     }
-                                  }}
-                                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-bold"
-                                  placeholder={
-                                    selectedExtCarrier.cotacao_com_numero
-                                      ? "Apenas números"
-                                      : "Ex: WhatsApp, E-mail, 123456"
-                                  }
-                                />
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                                    Serviço da Transportadora *
+                                  </label>
+                                  {(selectedExtCarrier.lista_servicos || []).length > 1 ? (
+                                    <select
+                                      value={extService}
+                                      onChange={(e) => setExtService(e.target.value)}
+                                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-bold"
+                                    >
+                                      <option value="">Selecione o serviço...</option>
+                                      {(selectedExtCarrier.lista_servicos || []).map((s) => (
+                                        <option key={s} value={s}>
+                                          {s}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      type="text"
+                                      value={
+                                        (selectedExtCarrier.lista_servicos || []).length === 1
+                                          ? selectedExtCarrier.lista_servicos[0]
+                                          : "Externo"
+                                      }
+                                      readOnly
+                                      className="w-full p-3 bg-slate-100 border border-slate-200 rounded-xl outline-none font-bold text-slate-500 cursor-not-allowed"
+                                      placeholder="Serviço"
+                                    />
+                                  )}
+                                </div>
                               </div>
 
                               {selectedExtCarrier.possui_opcao_retirar && (
@@ -14698,169 +15138,202 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
         )}
 
         {currentView === "series" && (
-          <div className="animate-in fade-in duration-500 space-y-6">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-              <h2 className="font-bold text-2xl text-slate-800 flex items-center gap-3">
-                <PantherIcon size={28} className="text-blue-600" /> Fresadora SS JACK
-              </h2>
-              <div className="flex gap-4 w-full md:w-auto items-center">
-                <div className="relative flex-1 md:w-80">
-                  <Search
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                    size={18}
-                  />
-                  <input
-                    type="text"
-                    placeholder="Buscar produto, série ou cliente..."
-                    value={seriesSearchTerm}
-                    onChange={(e) => setSeriesSearchTerm(e.target.value)}
-                    className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-medium shadow-sm transition-all"
-                  />
+          <div className="animate-in fade-in duration-500 grid grid-cols-1 lg:grid-cols-[65%_35%] gap-6 items-start h-full pb-10">
+            {/* BLOCO 1: SÉRIES REGISTRADAS ESTOQUE 2 (65%) */}
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden flex flex-col h-full lg:max-h-[calc(100vh-140px)]">
+              <div className="p-6 border-b border-slate-50 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-slate-50/50">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-200">
+                    <Barcode size={24} />
+                  </div>
+                  <div>
+                    <h2 className="font-black text-xl text-slate-800 leading-tight">Séries registradas Estoque 2</h2>
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Origem: SS JACK</p>
+                  </div>
                 </div>
-                {currentUser &&
-                  ["admin", "Administrador"].includes(
-                    currentUser.tipo_acesso,
-                  ) && (
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setIsSeriesModalOpen(true)}
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold shadow-md transition-all flex items-center justify-center gap-2 whitespace-nowrap"
-                      >
-                        <Plus size={20} /> Inserir
-                      </button>
-                      <button
-                        onClick={() => {
-                          fetchAvailableSeries();
-                          setIsGlobalReserveModalOpen(true);
-                        }}
-                        className="bg-amber-600 hover:bg-amber-700 text-white px-6 py-3 rounded-xl font-bold shadow-md transition-all flex items-center justify-center gap-2 whitespace-nowrap"
-                      >
-                        <Zap size={20} /> Reservar
-                      </button>
-                    </div>
+                
+                <div className="flex items-center gap-3 w-full md:w-auto">
+                  <div className="relative flex-1 md:w-64">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                    <input
+                      type="text"
+                      placeholder="Buscar série ou produto..."
+                      value={seriesSearchTerm}
+                      onChange={(e) => setSeriesSearchTerm(e.target.value)}
+                      className="w-full pl-9 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-xs font-bold transition-all shadow-sm"
+                    />
+                  </div>
+                  {currentUser && ["admin", "Administrador"].includes(currentUser.tipo_acesso) && (
+                    <button
+                      onClick={() => setIsSeriesModalOpen(true)}
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl font-black text-xs shadow-md shadow-blue-100 transition-all flex items-center gap-2 whitespace-nowrap"
+                    >
+                      <Plus size={16} /> Inserir
+                    </button>
                   )}
+                </div>
+              </div>
+
+              <div className="overflow-x-auto overflow-y-auto flex-1 custom-scrollbar min-h-0">
+                <table className="w-full text-left border-collapse">
+                  <thead className="sticky top-0 bg-slate-50 z-10 shadow-sm border-b border-slate-100">
+                    <tr>
+                      <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Data</th>
+                      <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Produto</th>
+                      <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Série</th>
+                      <th className="px-6 py-4 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest">Ação</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {isLoadingSeries ? (
+                      <tr>
+                        <td colSpan={4} className="px-6 py-20 text-center">
+                          <Loader2 className="animate-spin mx-auto mb-3 text-blue-500" size={32} />
+                          <p className="text-slate-400 font-bold text-sm">Sincronizando estoque...</p>
+                        </td>
+                      </tr>
+                    ) : seriesList.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="px-6 py-20 text-center">
+                          <p className="text-slate-400 font-bold text-sm">Nenhum registro encontrado no sistema SS JACK.</p>
+                        </td>
+                      </tr>
+                    ) : sortedSeriesList
+                      .filter(s => {
+                        const term = seriesSearchTerm.toLowerCase();
+                        return (s.serie?.toLowerCase().includes(term) || s.produto?.toLowerCase().includes(term));
+                      })
+                      .map((s) => {
+                        const statusStr = (s.status || "").toLowerCase().trim();
+                        const isAvailable = statusStr === "disponível" || statusStr === "disponivel" || statusStr === "";
+                        const isReservado = statusStr === "reservado";
+                        
+                        return (
+                          <tr key={s.id} className="hover:bg-slate-50/50 transition-colors group">
+                            <td className="px-6 py-4">
+                              <span className="text-xs font-bold text-slate-500">
+                                {s.data ? new Date(s.data).toLocaleDateString("pt-BR") : "-"}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className="text-xs font-black text-slate-700 tracking-tight">
+                                {s.produto || "-"}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="flex flex-col gap-1">
+                                <span className={`px-4 py-1.5 rounded-lg font-mono font-black text-xs border shadow-sm transition-all inline-block w-fit ${
+                                  isAvailable 
+                                    ? "bg-emerald-50 text-emerald-600 border-emerald-100"
+                                    : isReservado
+                                      ? "bg-orange-50 text-orange-600 border-orange-100 line-through opacity-70" 
+                                      : "bg-rose-50 text-rose-600 border-rose-100 opacity-60"
+                                }`}>
+                                  {s.serie}
+                                </span>
+                                {s.status && !isAvailable && (
+                                  <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 pl-1">
+                                    {s.status}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              <button
+                                onClick={() => {
+                                  setSelectedSeriesToReserve(s);
+                                  setReserveClientName(s.cliente || "");
+                                  setIsSingleReserveModalOpen(true);
+                                }}
+                                disabled={!isAvailable}
+                                className={`px-4 py-1.5 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all ${
+                                  !isAvailable
+                                    ? "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
+                                    : "bg-amber-100 text-amber-700 hover:bg-amber-600 hover:text-white border border-amber-200 shadow-sm"
+                                }`}
+                              >
+                                {isAvailable ? "Reservar" : isReservado ? "Reservado" : s.status || "Indisponível"}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
               </div>
             </div>
 
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left">
-                  <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs border-b border-slate-100">
-                    <tr>
-                      <th className="px-6 py-4">Data</th>
-                      <th className="px-6 py-4">Cliente</th>
-                      <th className="px-6 py-4">Série</th>
-                      <th className="px-6 py-4">Status Brinde</th>
-                      <th className="px-6 py-4 text-center">Check</th>
-                      <th className="px-6 py-4 text-center">Detalhes</th>
-                      <th className="px-6 py-4">Última alteração</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {isLoadingSeries ? (
-                      <tr>
-                        <td
-                          colSpan={7}
-                          className="px-6 py-12 text-center text-slate-400"
-                        >
-                          <Loader2 className="animate-spin mx-auto mb-2" />
-                          Carregando séries...
-                        </td>
-                      </tr>
-                    ) : seriesList.length > 0 ? (
-                      sortedSeriesList
-                        .filter((s) => {
-                          const term = seriesSearchTerm.toLowerCase();
-                          return (
-                            s.produto?.toLowerCase().includes(term) ||
-                            s.serie?.toLowerCase().includes(term) ||
-                            s.cliente?.toLowerCase().includes(term)
-                          );
-                        })
-                        .map((s) => (
-                          <tr
-                            key={s.id}
-                            className="hover:bg-slate-50 transition-colors"
+            {/* BLOCO 2: MOVIMENTAÇÕES DE SÉRIE (35%) */}
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden flex flex-col h-full lg:max-h-[calc(100vh-140px)]">
+              <div className="p-6 border-b border-slate-50 bg-slate-50/50 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-200">
+                    <RefreshCw size={22} />
+                  </div>
+                  <div>
+                    <h2 className="font-black text-lg text-slate-800 leading-tight">Movimentações de série</h2>
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Últimos 15 dias</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={fetchSeriesMovimentacoes}
+                  className="p-2 hover:bg-white rounded-xl transition-colors text-slate-400 hover:text-indigo-600"
+                >
+                  <RefreshCw size={18} className={isLoadingMovimentacoes ? "animate-spin" : ""} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
+                {isLoadingMovimentacoes ? (
+                  <div className="py-10 text-center">
+                    <Loader2 className="animate-spin mx-auto mb-2 text-indigo-500" />
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Carregando...</p>
+                  </div>
+                ) : seriesMovimentacoes.length === 0 ? (
+                  <div className="py-10 text-center border-2 border-dashed border-slate-50 rounded-2xl">
+                    <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-3">
+                      <Search size={24} className="text-slate-300" />
+                    </div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Sem movimentações recentes</p>
+                  </div>
+                ) : (
+                  seriesMovimentacoes.map((mov) => (
+                    <div key={mov.id} className="bg-slate-50/50 border border-slate-100 rounded-2xl p-4 transition-all hover:bg-white hover:shadow-md hover:border-indigo-100 group">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md uppercase tracking-wider">
+                          {mov.created_at ? new Date(mov.created_at).toLocaleDateString("pt-BR") : "-"}
+                        </span>
+                        <div className="flex items-center gap-1.5 text-slate-400">
+                          <Package size={14} />
+                          <span className="text-xs font-bold font-mono">#{mov.pedido}</span>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-3">
+                        <div>
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Produto</p>
+                          <p className="text-xs font-black text-slate-700 leading-snug line-clamp-2">
+                            {mov.produtos?.descricao || "Produto não identificado"}
+                          </p>
+                        </div>
+                        
+                        <div className="bg-white p-3 rounded-xl border border-slate-100 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Barcode size={16} className="text-indigo-500" />
+                            <span className="text-xs font-mono font-black text-slate-600 tracking-tight">{mov.registro}</span>
+                          </div>
+                          <button 
+                            onClick={() => copyToClipboard(mov.registro || "")}
+                            className="p-1.5 hover:bg-indigo-50 text-slate-400 hover:text-indigo-600 rounded-lg transition-all"
+                            title="Copiar série"
                           >
-                            <td className="px-6 py-4 font-bold text-slate-700">
-                              {s.data
-                                ? new Date(s.data).toLocaleDateString("pt-BR")
-                                : "-"}
-                            </td>
-                            <td className="px-6 py-4 font-bold text-slate-800">
-                              {s.cliente || "-"}
-                            </td>
-                            <td className="px-6 py-4 font-mono font-bold text-slate-600">
-                              {s.serie}
-                            </td>
-                            <td className="px-6 py-4">
-                              <span
-                                className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${
-                                  (s.status_brinde || "Não definido") ===
-                                  "Não definido"
-                                    ? "bg-orange-100 text-orange-700 border-orange-200"
-                                    : s.status_brinde ===
-                                        "Brinde não enviado junto"
-                                      ? "bg-red-100 text-red-700 border-red-200"
-                                      : s.status_brinde ===
-                                          "Brinde enviado em venda anterior"
-                                        ? "bg-green-100 text-green-700 border-green-200"
-                                        : s.status_brinde ===
-                                            "Brinde enviado via Correios"
-                                          ? "bg-blue-100 text-blue-700 border-blue-200"
-                                          : s.status_brinde ===
-                                              "Brinde enviado com outro pedido"
-                                            ? "bg-green-100 text-green-700 border-green-200"
-                                            : "bg-slate-100 text-slate-600 border-slate-200"
-                                }`}
-                              >
-                                {s.status_brinde || "Não definido"}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4 text-center">
-                              <button
-                                onClick={() => {
-                                  setSelectedSeriesForBrinde(s);
-                                  setNewBrindeStatus(s.status_brinde || "");
-                                  setIsBrindePopupOpen(true);
-                                }}
-                                className="p-2 hover:bg-emerald-50 text-emerald-600 rounded-lg transition-all"
-                              >
-                                <CheckCircle2 size={18} />
-                              </button>
-                            </td>
-                            <td className="px-6 py-4 text-center">
-                              <button
-                                onClick={() => {
-                                  setSelectedSeriesForLog(s);
-                                  setIsLogModalOpen(true);
-                                }}
-                                className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg transition-all"
-                              >
-                                <Info size={18} />
-                              </button>
-                            </td>
-                            <td className="px-6 py-4 font-medium text-slate-500">
-                              {s.data_alteracao
-                                ? new Date(s.data_alteracao).toLocaleDateString(
-                                    "pt-BR",
-                                  )
-                                : "-"}
-                            </td>
-                          </tr>
-                        ))
-                    ) : (
-                      <tr>
-                        <td
-                          colSpan={7}
-                          className="px-6 py-12 text-center text-slate-400 font-bold"
-                        >
-                          Nenhum registro encontrado.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                            <Copy size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>
@@ -14941,7 +15414,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                             >
                               <td className="px-6 py-4">
                                 <div className="flex items-center gap-3">
-                                  <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 font-bold text-sm overflow-hidden">
+                                  <div className={`w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 font-bold text-sm overflow-hidden ${!u.ativo ? "grayscale opacity-60" : ""}`}>
                                     {u.foto_url ? (
                                       <img
                                         src={u.foto_url}
@@ -15687,9 +16160,21 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                               <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600">
                                 <Package size={20} />
                               </div>
-                              <p className="font-bold text-slate-800">
-                                {p.descricao}
-                              </p>
+                              <div className="flex flex-col">
+                                <p className="font-bold text-slate-800 flex items-center gap-2">
+                                  {p.descricao}
+                                  <button
+                                    onClick={() => {
+                                      setSelectedProductInfo(p);
+                                      setIsProductInfoModalOpen(true);
+                                    }}
+                                    className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-all"
+                                    title="Informações adicionais"
+                                  >
+                                    <Info size={14} />
+                                  </button>
+                                </p>
+                              </div>
                             </div>
                           </td>
                           <td className="px-6 py-4 font-mono font-bold text-slate-500">
@@ -15718,7 +16203,13 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                             </div>
                           </td>
                           <td className="px-6 py-4 font-bold text-slate-700">
-                            {p.peso_unitario / 1000}kg
+                            {p.peso_suportado && p.peso_suportado.length > 1 ? (
+                              <span className="text-blue-600 bg-blue-50 px-2 py-0.5 rounded text-[10px] uppercase">
+                                Peso variável
+                              </span>
+                            ) : (
+                              `${((p.peso_suportado && p.peso_suportado.length === 1 ? p.peso_suportado[0] : p.peso_unitario) || 0) / 1000}kg`
+                            )}
                           </td>
                           <td className="px-6 py-4 text-center">
                             {p.envio_quality ? (
@@ -16976,72 +17467,46 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1 text-center">
-                          Peso Adicional (kg)
+                          Peso do Item
                         </label>
-                        <input
-                          type="number"
-                          value={addItemExtraWeight ? addItemExtraWeight / 1000 : ""}
+                        <select
+                          value={addItemExtraWeight}
                           onChange={(e) =>
-                            setAddItemExtraWeight(Number(e.target.value) * 1000)
+                            setAddItemExtraWeight(Number(e.target.value))
                           }
-                          disabled={addItemFilter !== "Caixa DG"}
-                          placeholder="0"
-                          className="w-full p-3 bg-white border border-slate-200 rounded-xl font-bold text-center text-lg disabled:bg-slate-200/50 disabled:cursor-not-allowed outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all"
-                        />
+                          className="w-full p-3 bg-white border border-slate-200 rounded-xl font-bold text-center text-lg outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all cursor-pointer appearance-none"
+                        >
+                          <option value="0" disabled>
+                            Selecione...
+                          </option>
+                          {(() => {
+                            const suggestions = getWeightSuggestions(
+                              selectedProductToAdd,
+                            );
+                            const formatWeight = (w: number) => {
+                              if (w < 1000) return `${w}g`;
+                              const kg = w / 1000;
+                              return Number.isInteger(kg)
+                                ? `${kg}kg`
+                                : `${kg.toFixed(2)}kg`;
+                            };
+
+                            if (suggestions.length > 0) {
+                              return suggestions.map((w) => (
+                                <option key={w} value={w}>
+                                  {formatWeight(w)}
+                                </option>
+                              ));
+                            }
+                            return (
+                              <option value={selectedProductToAdd.peso_unitario}>
+                                {formatWeight(selectedProductToAdd.peso_unitario)} (Legado)
+                              </option>
+                            );
+                          })()}
+                        </select>
                       </div>
                     </div>
-                    {addItemFilter === "Caixa DG" &&
-                      selectedProductToAdd.peso_adicional && (
-                        <div className="text-xs text-center text-slate-500 font-medium bg-slate-100 p-2 rounded-lg border border-slate-200">
-                          Peso adicional máximo para esta caixa:{" "}
-                          <span className="font-bold">
-                            {selectedProductToAdd.peso_adicional}g
-                          </span>
-                        </div>
-                      )}
-
-                    {addItemFilter === "Caixa DG" && selectedProductToAdd && (
-                      <div className="space-y-3 pt-2">
-                        {/* Suggested Weights Section */}
-                        {(() => {
-                          const adm = String(selectedProductToAdd.codigo_adm);
-                          const suggestionsMap: Record<string, number[]> = {
-                            "1": [250, 350, 550, 750, 1000],
-                            "2": [550, 1000, 2000],
-                            "3": [2000, 3000, 4000, 5000],
-                            "4": [3000, 4000, 5000, 6000, 7000, 8000],
-                            "5": [5000, 6000, 7000, 8000, 9000, 10000],
-                            "6": [5000, 6000, 7000, 8000, 9000, 10000],
-                            "7": [15000, 18000, 20000, 26000],
-                            "8": [
-                              10000, 12000, 15000, 18000, 20000, 22000, 25000,
-                            ],
-                          };
-                          const suggestions = suggestionsMap[adm];
-
-                          if (!suggestions) return null;
-
-                          return (
-                            <div className="space-y-2">
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">
-                                Peso compatível com a caixa selecionada:
-                              </p>
-                              <div className="flex flex-wrap gap-2">
-                                {suggestions.map((weight) => (
-                                  <button
-                                    key={weight}
-                                    onClick={() =>
-                                      setAddItemExtraWeight(weight)
-                                    }
-                                    className="px-2 py-1 bg-slate-100 hover:bg-blue-100 text-slate-600 hover:text-blue-700 rounded-md text-[10px] font-bold transition-colors border border-slate-200"
-                                  >
-                                    #{weight}gr
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          );
-                        })()}
 
                         {/* Warning Message */}
                         <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-100 rounded-xl">
@@ -17056,9 +17521,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                           </p>
                         </div>
                       </div>
-                    )}
-                  </div>
-                ) : (
+                    ) : (
                   <div className="flex-1 flex flex-col items-center justify-center text-center text-slate-400">
                     <Package size={32} className="mb-2" />
                     <p className="font-bold">Selecione um produto</p>
@@ -18201,13 +18664,13 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                   id: "secondary_nfs", 
                   label: "Notas Agrupadas", 
                   icon: Layers, 
-                  disabled: (selectedShipmentForDetails.qtd_notas || 0) <= 1 
+                  disabled: (selectedShipmentForDetails?.qtd_notas || 0) <= 1 
                 },
                 { 
                   id: "general_costs", 
                   label: "Remessas", 
                   icon: Calculator, 
-                  disabled: selectedShipmentForDetails.operacao?.toLowerCase() !== "sem agendamento" 
+                  disabled: selectedShipmentForDetails?.operacao?.toLowerCase() !== "sem agendamento" 
                 },
                 { 
                   id: "logistics", 
@@ -22198,8 +22661,87 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                       ))}
                     </div>
                   </div>
+
+                  {/* Linha 5 — Serviços da Transportadora */}
+                  <div className="pt-4 border-t border-slate-100">
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                      Serviços da Transportadora
+                    </label>
+                    <div className="flex gap-2 mb-3">
+                      <input
+                        type="text"
+                        value={newServiceInput}
+                        onChange={(e) => setNewServiceInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            if (newServiceInput.trim()) {
+                              const current = carrierFormData.lista_servicos || [];
+                              if (!current.includes(newServiceInput.trim())) {
+                                setCarrierFormData({
+                                  ...carrierFormData,
+                                  lista_servicos: [...current, newServiceInput.trim()],
+                                });
+                              }
+                              setNewServiceInput("");
+                            }
+                          }
+                        }}
+                        className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-bold text-slate-700"
+                        placeholder="Ex: Rápido, Econômico..."
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (newServiceInput.trim()) {
+                            const current = carrierFormData.lista_servicos || [];
+                            if (!current.includes(newServiceInput.trim())) {
+                              setCarrierFormData({
+                                ...carrierFormData,
+                                lista_servicos: [...current, newServiceInput.trim()],
+                              });
+                            }
+                            setNewServiceInput("");
+                          }
+                        }}
+                        className="bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-xl transition-all shadow-md"
+                      >
+                        <Plus size={20} />
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {(carrierFormData.lista_servicos || []).map((service, index) => (
+                        <div
+                          key={index}
+                          className="flex items-center gap-2 bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg border border-blue-100 font-bold text-xs animate-in zoom-in-95 duration-200"
+                        >
+                          {service}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCarrierFormData({
+                                ...carrierFormData,
+                                lista_servicos: (carrierFormData.lista_servicos || []).filter(
+                                  (_, i) => i !== index,
+                                ),
+                              });
+                            }}
+                            className="hover:bg-blue-200 rounded-full p-0.5"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                      {(carrierFormData.lista_servicos || []).length === 0 && (
+                        <p className="text-xs text-slate-400 italic font-bold uppercase tracking-wider">
+                          Nenhum serviço cadastrado.
+                        </p>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
+
             </div>
 
             <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-between items-center">
@@ -22248,11 +22790,29 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col">
             <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
               <h3 className="font-bold text-lg text-slate-800 flex items-center gap-2">
-                <PlusCircle size={20} className="text-blue-600" /> Cadastrar
-                Produto
+                <PlusCircle size={20} className="text-blue-600" />{" "}
+                {newProductFormData.id ? "Editar Produto" : "Cadastrar Produto"}
               </h3>
               <button
-                onClick={() => setIsAddProductModalOpen(false)}
+                onClick={() => {
+                  setIsAddProductModalOpen(false);
+                  setNewProductFormData({
+                    codigo_adm: "",
+                    descricao: "",
+                    tipo: "Caixa DG",
+                    comprimento: 0,
+                    largura: 0,
+                    altura: 0,
+                    peso_unitario: 80,
+                    peso_adicional: 0,
+                    peso_suportado: [],
+                    envia_correios: false,
+                    envio_quality: false,
+                    precisa_contrato: false,
+                    caixa_propria: false,
+                    exibir: true,
+                  });
+                }}
                 className="p-2 hover:bg-rose-50 text-slate-400 hover:text-rose-500 rounded-xl transition-colors"
               >
                 <X size={20} />
@@ -22384,32 +22944,90 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                 </div>
               </div>
 
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">
-                    Peso Unitário
-                  </label>
-                  <span className="text-blue-600 font-black text-lg">
-                    {newProductFormData.peso_unitario}g
-                  </span>
+              <div className="space-y-4 pt-4 border-t border-slate-100">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">
+                  Lista de Pesos Suportados (gramas)
+                </label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Weight
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                      size={18}
+                    />
+                    <input
+                      type="text"
+                      value={tempProductWeight}
+                      onChange={(e) =>
+                        setTempProductWeight(e.target.value.replace(/\D/g, ""))
+                      }
+                      placeholder="Peso em gramas... Ex: 1500"
+                      className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-bold"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          const val = parseInt(tempProductWeight);
+                          if (val > 0) {
+                            const current =
+                              newProductFormData.peso_suportado || [];
+                            setNewProductFormData({
+                              ...newProductFormData,
+                              peso_suportado: [...current, val],
+                            });
+                            setTempProductWeight("");
+                          }
+                        }
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const val = parseInt(tempProductWeight);
+                      if (val > 0) {
+                        const current = newProductFormData.peso_suportado || [];
+                        setNewProductFormData({
+                          ...newProductFormData,
+                          peso_suportado: [...current, val],
+                        });
+                        setTempProductWeight("");
+                      }
+                    }}
+                    className="p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md transition-all"
+                  >
+                    <Plus size={20} />
+                  </button>
                 </div>
-                <input
-                  type="range"
-                  min={80}
-                  max={800000}
-                  step={10}
-                  value={newProductFormData.peso_unitario}
-                  onChange={(e) =>
-                    setNewProductFormData({
-                      ...newProductFormData,
-                      peso_unitario: parseInt(e.target.value),
-                    })
-                  }
-                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-600 [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white [&::-webkit-slider-thumb]:shadow-lg [&::-moz-range-thumb]:w-6 [&::-moz-range-thumb]:h-6 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-blue-600 [&::-moz-range-thumb]:border-4 [&::-moz-range-thumb]:border-white [&::-moz-range-thumb]:shadow-lg"
-                />
-                <div className="flex justify-between text-[10px] font-bold text-slate-400">
-                  <span>80g</span>
-                  <span>800kg</span>
+
+                <div className="flex flex-wrap gap-2">
+                  {(newProductFormData.peso_suportado || []).map((w, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center gap-2 bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg border border-blue-100 font-bold text-xs"
+                    >
+                      {w < 1000 ? `${w}g` : `${w / 1000}kg`}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const current =
+                            newProductFormData.peso_suportado || [];
+                          setNewProductFormData({
+                            ...newProductFormData,
+                            peso_suportado: current.filter(
+                              (_, i) => i !== idx,
+                            ),
+                          });
+                        }}
+                        className="text-blue-400 hover:text-rose-500 transition-colors"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                  {(newProductFormData.peso_suportado || []).length === 0 && (
+                    <p className="text-[10px] text-slate-400 italic font-bold uppercase tracking-wider">
+                      Nenhum peso cadastrado.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -22471,6 +23089,133 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                 )}
                 Salvar Produto
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isProductInfoModalOpen && selectedProductInfo && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-300">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-300">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+              <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                <Package size={24} className="text-blue-600" /> Detalhes do
+                Produto
+              </h3>
+              <div className="flex items-center gap-2">
+                {currentUser &&
+                  ["admin", "Administrador"].includes(
+                    currentUser.tipo_acesso,
+                  ) && (
+                    <>
+                      <button
+                        onClick={() => {
+                          setNewProductFormData({
+                            ...selectedProductInfo,
+                            peso_suportado:
+                              selectedProductInfo.peso_suportado || [],
+                          });
+                          setIsProductInfoModalOpen(false);
+                          setIsAddProductModalOpen(true);
+                        }}
+                        className="p-2 hover:bg-blue-50 text-blue-600 rounded-xl transition-colors"
+                        title="Editar"
+                      >
+                        <Pencil size={20} />
+                      </button>
+                      <button
+                        onClick={() =>
+                          handleDeleteProduct(selectedProductInfo.id)
+                        }
+                        className="p-2 hover:bg-rose-50 text-rose-500 rounded-xl transition-colors"
+                        title="Excluir"
+                      >
+                        <Trash2 size={20} />
+                      </button>
+                    </>
+                  )}
+                <button
+                  onClick={() => setIsProductInfoModalOpen(false)}
+                  className="p-2 hover:bg-slate-200 rounded-full transition-colors text-slate-400"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+            <div className="p-8 space-y-6">
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                  Descrição
+                </label>
+                <p className="text-lg font-bold text-slate-800">
+                  {selectedProductInfo.descricao}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                    Código ADM
+                  </label>
+                  <p className="font-mono font-bold text-slate-600">
+                    {selectedProductInfo.codigo_adm}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                    Tipo
+                  </label>
+                  <p className="font-bold text-slate-600">
+                    {selectedProductInfo.tipo || "Geral"}
+                  </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                <div className="text-center">
+                  <label className="block text-[8px] font-black text-slate-400 uppercase">
+                    Comp.
+                  </label>
+                  <p className="font-bold text-slate-700">
+                    {selectedProductInfo.comprimento}cm
+                  </p>
+                </div>
+                <div className="text-center">
+                  <label className="block text-[8px] font-black text-slate-400 uppercase">
+                    Larg.
+                  </label>
+                  <p className="font-bold text-slate-700">
+                    {selectedProductInfo.largura}cm
+                  </p>
+                </div>
+                <div className="text-center">
+                  <label className="block text-[8px] font-black text-slate-400 uppercase">
+                    Alt.
+                  </label>
+                  <p className="font-bold text-slate-700">
+                    {selectedProductInfo.altura}cm
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-3">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                  Pesos Suportados
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {(selectedProductInfo.peso_suportado || []).length > 0 ? (
+                    selectedProductInfo.peso_suportado?.map((w, i) => (
+                      <span
+                        key={i}
+                        className="bg-blue-600 text-white px-3 py-1 rounded-full font-bold text-xs shadow-sm"
+                      >
+                        {w < 1000 ? `${w}g` : `${w / 1000}kg`}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="bg-slate-200 text-slate-600 px-3 py-1 rounded-full font-bold text-xs">
+                      {(selectedProductInfo.peso_unitario || 0) / 1000}kg (Legado)
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -25350,6 +26095,91 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
         </div>
       )}
       {/* MODAL NOVO LOTE DE SÉRIES */}
+      {isSingleReserveModalOpen && selectedSeriesToReserve && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden"
+          >
+            <div className="p-6 border-b border-slate-50 bg-slate-50/50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-500 text-white rounded-xl shadow-lg shadow-amber-100">
+                  <Zap size={20} />
+                </div>
+                <div>
+                  <h3 className="font-black text-lg text-slate-800 leading-tight">Reservar Série</h3>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Estoque 2 - SS JACK</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setIsSingleReserveModalOpen(false);
+                  setSelectedSeriesToReserve(null);
+                  setReserveClientName("");
+                }}
+                className="p-2 hover:bg-white rounded-xl transition-colors text-slate-400"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-8 space-y-6">
+              <div className="bg-slate-50 rounded-2xl p-5 border border-slate-100">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Série para Reserva</p>
+                <div className="flex items-center justify-between">
+                  <span className="text-xl font-mono font-black text-slate-700 tracking-tighter">
+                    {selectedSeriesToReserve.serie}
+                  </span>
+                  <button 
+                    onClick={() => copyToClipboard(selectedSeriesToReserve.serie)}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-[10px] font-black text-slate-500 hover:text-blue-600 hover:border-blue-200 transition-all shadow-sm"
+                  >
+                    <Copy size={12} />
+                    COPIAR
+                  </button>
+                </div>
+                <p className="text-[11px] font-bold text-slate-500 mt-2 line-clamp-1">
+                  {selectedSeriesToReserve.produto}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Nome do Cliente / Pedido</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Maria Oliveira / Pedido 12345"
+                  value={reserveClientName}
+                  onChange={(e) => setReserveClientName(e.target.value)}
+                  className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 font-black text-slate-700 placeholder:text-slate-300 transition-all shadow-sm"
+                  autoFocus
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => {
+                    setIsSingleReserveModalOpen(false);
+                    setSelectedSeriesToReserve(null);
+                    setReserveClientName("");
+                  }}
+                  className="flex-1 px-6 py-4 rounded-2xl font-black text-xs text-slate-500 bg-white border border-slate-200 hover:bg-slate-50 transition-all uppercase tracking-widest"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleSingleReserve}
+                  disabled={!reserveClientName.trim()}
+                  className="flex-2 px-6 py-4 rounded-2xl font-black text-xs text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-xl shadow-blue-100 uppercase tracking-widest flex items-center justify-center gap-2"
+                >
+                  Confirmar Reserva
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
       {isSeriesModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[150] flex items-center justify-center p-4 animate-in fade-in duration-300">
           <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-300">

@@ -154,6 +154,7 @@ export interface Product {
   ativo?: boolean;
   observacao?: string;
   restricao_simulador_interno?: boolean;
+  peso_suportado?: number[];
 }
 
 export interface CorreiosFreightTable {
@@ -427,6 +428,7 @@ export interface PrimexAbrangencia {
   prazo: number;
   frete_minimo: number;
   seguro: number;
+  codigo_fiscal?: string;
 }
 
 export interface BrixTariff {
