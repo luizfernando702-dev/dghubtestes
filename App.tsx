@@ -106,6 +106,8 @@ import {
   MessageCircle,
   Lightbulb,
   Scale,
+  Printer,
+  Upload,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import jsPDF from "jspdf";
@@ -1397,7 +1399,78 @@ export const App: React.FC = () => {
     ConfiguracaoServico[]
   >([]);
 
+  const [isThermalLabelModalOpen, setIsThermalLabelModalOpen] = useState(false);
+  const [thermalLabelData, setThermalLabelData] = useState<any>(null);
+
   // Weight and Volume calculations
+  const parseThermalLabelXml = (xmlText: string) => {
+    try {
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+
+      const destNode = xmlDoc.getElementsByTagName("dest")[0];
+      if (!destNode) {
+        toast.error("Tag <dest> não encontrada no XML.");
+        return null;
+      }
+
+      const getTagValue = (tagName: string, parent: Element | Document = xmlDoc) => {
+        const el = parent.getElementsByTagName(tagName)[0];
+        return el ? el.textContent : null;
+      };
+
+      const customerName = getTagValue("xNome", destNode);
+      const cepRaw = getTagValue("CEP", destNode);
+      const city = getTagValue("xMun", destNode);
+      const uf = getTagValue("UF", destNode);
+      const infCpl = getTagValue("infCpl") || "";
+
+      // Order number extraction: PED followed by numbers, considering dots
+      // Example: "PED 335.932" -> "335.932"
+      const pedMatch = infCpl.match(/PED\s*([\d.]+)/i);
+      const orderNumber = pedMatch ? pedMatch[1] : "Pedido não identificado";
+
+      const formattedCep = cepRaw
+        ? cepRaw.replace(/^(\d{5})(\d{3})$/, "$1-$2")
+        : "";
+
+      return {
+        customerName,
+        cep: formattedCep,
+        city,
+        uf,
+        orderNumber,
+        dateTime: new Date().toLocaleString(),
+      };
+    } catch (error) {
+      console.error("Error parsing XML:", error);
+      return null;
+    }
+  };
+
+  const handleThermalXmlUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result as string;
+      const data = parseThermalLabelXml(text);
+      if (data && data.customerName) {
+        setThermalLabelData(data);
+      } else {
+        toast.error("XML inválido ou não compatível.");
+      }
+    };
+    reader.readAsText(file);
+    // Clear the input value so the same file can be selected again
+    event.target.value = "";
+  };
+
+  const handlePrintLabel = () => {
+    window.print();
+  };
+
   const totalAirCubicWeight = useMemo(
     () =>
       parseFloat(
@@ -8421,10 +8494,11 @@ export const App: React.FC = () => {
     const types = Array.from(
       new Set(simulationItems.map((i) => i.tipo).filter(Boolean)),
     ).join(", ");
+    const formatWeight = (val: number) => val.toFixed(2).replace(".", ",");
     const volumesList = simulationItems
       .map(
         (i) =>
-          `${i.quantity} cx ${i.comprimento}x${i.largura}x${i.altura}, ${(i.peso_total_kg * i.quantity).toFixed(2)}kg`,
+          `${i.quantity} cx ${i.comprimento}x${i.largura}x${i.altura}, ${formatWeight(i.peso_total_kg * i.quantity)}kg`,
       )
       .join("\n");
 
@@ -8440,13 +8514,13 @@ CPF/CNPJ: ${quoteClientCpfCnpj}
 CEP: ${cep}
 ${city} - ${uf}
 
-Valor fiscal: R$ ${nfValue.toFixed(2)}
+Valor fiscal: R$ ${nfValue.toFixed(2).replace(".", ",")}
 Tipo: ${types || "Geral"}
 
-Volumes
+Volumes (Comp x Larg x Alt)
 ${volumesList}
 
-Peso total: ${totalWeight.toFixed(2)}kg Volumes: ${totalVolumes}`;
+Peso total: ${formatWeight(totalWeight)}kg Volumes: ${totalVolumes}`;
 
     setGeneratedQuoteText(text);
   };
@@ -8654,6 +8728,11 @@ Peso total: ${totalWeight.toFixed(2)}kg Volumes: ${totalVolumes}`;
     totalWeight?: number,
     isReverseLogistics?: boolean,
   ) => {
+    const formatWeight = (val: number | undefined) => {
+      if (val === undefined || val === null) return "0,00";
+      return val.toFixed(2).replace(".", ",");
+    };
+
     if (isVolumetryOnly) {
       const hasEquipment = simulationItems.some((item) =>
         item.tipo?.toLowerCase().includes("equipamento"),
@@ -8663,7 +8742,7 @@ Peso total: ${totalWeight.toFixed(2)}kg Volumes: ${totalVolumes}`;
       const itemsList = simulationItems
         .map(
           (item) =>
-            `${item.quantity} cx ${item.comprimento}x${item.largura}x${item.altura}, ${item.peso_total_kg}kg`,
+            `${item.quantity} cx ${item.comprimento}x${item.largura}x${item.altura}, ${formatWeight(item.peso_total_kg * item.quantity)}kg`,
         )
         .join("\n");
 
@@ -8682,13 +8761,13 @@ CNPJ 10.361.914.0001-31
 CEP 74843-580
 Goiânia - GO
 
-Valor fiscal: R$ ${nfValue?.toFixed(2) || "0,00"}
+Valor fiscal: R$ ${nfValue?.toFixed(2).replace(".", ",") || "0,00"}
 Tipo: ${typeLabel}
 
-Volumes
+Volumes (Comp x Larg x Alt)
 ${itemsList}
 
-Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
+Peso total: ${formatWeight(totalWeight)}kg Volumes: ${volumes}`;
       }
 
       return `Remetente e tomador do frete:
@@ -8703,13 +8782,13 @@ CPF/CNPJ: ${cpfCnpj || "(Dados da input de CPF e CNPJ)"}
 CEP: ${cep || "(Dados da input de CEP)"}
 ${city || "(Cidade)"} - ${uf || "(Estado)"}
 
-Valor fiscal: R$ ${nfValue?.toFixed(2) || "0,00"}
+Valor fiscal: R$ ${nfValue?.toFixed(2).replace(".", ",") || "0,00"}
 Tipo: ${typeLabel}
 
-Volumes
+Volumes (Comp x Larg x Alt)
 ${itemsList}
 
-Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
+Peso total: ${formatWeight(totalWeight)}kg Volumes: ${volumes}`;
     }
 
     // Mapeamento de nomes de transportadoras conforme solicitado
@@ -8808,7 +8887,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
         undefined,
         selectedQuoteForFreight.uf,
         selectedQuoteForFreight.valor_fiscal,
-        selectedQuoteForFreight.peso_cotado,
+        selectedQuoteForFreight.peso_cotado / 1000,
       );
 
       const { error } = await supabase
@@ -9178,7 +9257,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
         cep,
         uf,
         nfValue,
-        Math.round(totalWeight * 1000),
+        totalWeight,
         complementaryData.isReverseLogistics,
       );
 
@@ -10372,7 +10451,7 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
       newFreight.pedido?.toString().length !== 6 &&
       newFreight.operacao !== "Financeiro"
     )
-      return alert("Pedido deve ter 4 or 6 dígitos.");
+      return alert("Pedido deve ter 4 ou 6 dígitos.");
     if (!newFreight.vendedor) return alert("Selecione o vendedor.");
     if (
       newFreight.cl === undefined ||
@@ -10430,9 +10509,6 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
       !newFreight.rastreio
     )
       return alert("Rastreio obrigatório para esta operação.");
-    if (secondaryInvoices.length > 0 || (selectedFreight && selectedFreight?.qtd_notas > 1)) {
-      return showToast("Notas fiscais secundárias pendentes");
-    }
 
     setIsSaving(true);
 
@@ -10539,20 +10615,25 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
 
         // Atualizar notas secundárias: deletar antigas e inserir novas
         if (secondaryInvoices.length > 0 || (selectedFreight && selectedFreight?.qtd_notas > 1)) {
-          await supabase
+          const { error: delError } = await supabase
             .from("notas_fiscais_secundarias")
             .delete()
             .eq("id_frete", selectedFreight.id_frete);
+          
+          if (delError) throw delError;
+
           if (secondaryInvoices.length > 0) {
             const secondaryPayload = secondaryInvoices.map((inv) => ({
               id_frete: selectedFreight.id_frete,
               numero_nota: inv.numero_nota,
-              valor_nota: inv.valor_nota,
-              observacao: inv.observacao,
+              valor_nota: Number(inv.valor_nota),
+              observacao: inv.observacao || null,
             }));
-            await supabase
+            const { error: secError } = await supabase
               .from("notas_fiscais_secundarias")
               .insert(secondaryPayload);
+            
+            if (secError) throw secError;
           }
         }
 
@@ -10565,13 +10646,14 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
           .single();
 
         if (error) throw error;
+        if (!insertedFreight) throw new Error("Erro ao recuperar ID do frete inserido.");
 
         if (secondaryInvoices.length > 0) {
           const secondaryPayload = secondaryInvoices.map((inv) => ({
             id_frete: insertedFreight.id_frete,
             numero_nota: inv.numero_nota,
-            valor_nota: inv.valor_nota,
-            observacao: inv.observacao,
+            valor_nota: Number(inv.valor_nota),
+            observacao: inv.observacao || null,
           }));
           const { error: secError } = await supabase
             .from("notas_fiscais_secundarias")
@@ -11563,6 +11645,17 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
                   </>
                 )}
               </div>
+            )}
+
+            {/* THERMAL LABEL PRINTER */}
+            {currentUser?.departamento === "Logística" && (
+              <button
+                onClick={() => setIsThermalLabelModalOpen(true)}
+                className="p-2.5 rounded-xl border bg-neutral-900 border-neutral-800 text-slate-400 hover:bg-slate-800 hover:text-white transition-all outline-none"
+                title="Imprimir Etiqueta Térmica"
+              >
+                <Printer size={22} />
+              </button>
             )}
 
             {/* NOTIFICATIONS BELL */}
@@ -17310,6 +17403,116 @@ Peso total: ${totalWeight?.toFixed(2) || "0"}kg Volumes: ${volumes}`;
       )}
 
       {/* MODAL ADICIONAR ITEM */}
+      {/* MODAL ETIQUETA TÉRMICA */}
+      {isThermalLabelModalOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+              <h3 className="font-black text-lg text-slate-800 flex items-center gap-3">
+                <Printer size={24} className="text-blue-600" /> Impressão de Etiqueta Térmica
+              </h3>
+              <button
+                onClick={() => {
+                  setIsThermalLabelModalOpen(false);
+                  setThermalLabelData(null);
+                }}
+                className="p-2 hover:bg-rose-50 text-slate-400 hover:text-rose-500 rounded-xl transition-all"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="p-8 space-y-6">
+              {!thermalLabelData ? (
+                <div className="flex flex-col items-center justify-center py-12 border-2 border-dashed border-slate-200 rounded-3xl bg-slate-50/50 space-y-4">
+                  <div className="p-4 bg-blue-100 text-blue-600 rounded-full">
+                    <Upload size={32} />
+                  </div>
+                  <div className="text-center">
+                    <p className="font-bold text-slate-700">Selecione o XML da NF-e</p>
+                    <p className="text-xs text-slate-400 mt-1">O arquivo será processado apenas no seu navegador</p>
+                  </div>
+                  <label className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-all cursor-pointer flex items-center gap-2">
+                    <Upload size={18} /> Selecionar Arquivo
+                    <input
+                      type="file"
+                      accept=".xml"
+                      onChange={handleThermalXmlUpload}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Label Preview */}
+                  <div className="flex justify-center">
+                    <div 
+                      id="thermal-label-print"
+                      className="w-[400px] h-[200px] bg-white border border-slate-300 shadow-sm p-5 font-mono text-black relative flex flex-col overflow-hidden"
+                      style={{ width: '100mm', height: '50mm', padding: '4mm' }}
+                    >
+                      <div className="flex justify-between items-start text-[14px] font-black border-b-2 border-black pb-1 mb-2">
+                        <span>DENTAL MATRIZ</span>
+                        <span>TEL 62 32944737</span>
+                      </div>
+                      
+                      <div className="flex justify-between items-center text-[12px] font-black mb-3">
+                        <span className="bg-black text-white px-2 py-0.5">ENTREGA BALCÃO</span>
+                        <span>{thermalLabelData.dateTime}</span>
+                      </div>
+                      
+                      <div className="border-t border-black pt-2 flex-1">
+                        <p className="text-[11px] font-bold uppercase text-slate-500 mb-0.5">Cliente:</p>
+                        <p className="text-[16px] font-black leading-[1.1] break-words uppercase">
+                          {thermalLabelData.customerName}
+                        </p>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-2 gap-4 text-[13px] font-black">
+                        <div>
+                          <p className="text-[10px] uppercase text-slate-500 font-bold">CEP:</p>
+                          <p className="text-[15px]">{thermalLabelData.cep}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase text-slate-500 font-bold">Cidade/UF:</p>
+                          <p className="text-[15px] truncate">{thermalLabelData.city} - {thermalLabelData.uf}</p>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 border-t-2 border-black pt-2 flex justify-between items-end">
+                        <div className="flex-1">
+                          <p className="text-[10px] uppercase text-slate-500 font-bold">Nº do pedido:</p>
+                          <p className="text-[22px] font-black tracking-tighter leading-none">{thermalLabelData.orderNumber}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4">
+                    <button
+                      onClick={() => setThermalLabelData(null)}
+                      className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-4 rounded-xl transition-all flex items-center justify-center gap-2"
+                    >
+                      <RotateCcw size={18} /> Trocar XML
+                    </button>
+                    <button
+                      onClick={handlePrintLabel}
+                      className="flex-[2] bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
+                    >
+                      <Printer size={18} /> Imprimir Etiqueta
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-6 bg-slate-50 border-t border-slate-100 text-center">
+              <p className="text-xs text-slate-400 font-medium">Layout otimizado para etiquetas térmicas 100x50mm</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isAddItemModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
